@@ -16,6 +16,8 @@ module Krikit.Agent.Ops.Smoke.Tier
       -- * Services checked by 'TierServices'
     , Service (..)
     , serviceLaunchctlLabel
+    , ServiceExpectation (..)
+    , serviceExpectation
 
       -- * Agents exercised by 'TierSentry' / 'TierWorkhorse' / 'TierThinker' / 'TierBuilder'
     , Agent (..)
@@ -112,6 +114,31 @@ serviceLaunchctlLabel = \case
     ServiceOpenclaw        -> "ai.krikit.openclaw"
     ServiceMonitor         -> "ai.krikit.monitor"
     ServiceWorkspaceBackup -> "ai.krikit.workspace-backup"
+
+-- | What we expect a given service's runtime state to look like.
+-- Some services are long-running daemons (@MustBeRunning@). Others are
+-- one-shot boot helpers or scheduled jobs that are normally @not running@
+-- between fires (@MayBeWaiting@) — failing them on "not running" would
+-- be false-positive.
+data ServiceExpectation
+    = MustBeRunning
+    -- ^ Long-running daemon. @launchctl print@ must show
+    -- @state = running@.
+    | MayBeWaiting
+    -- ^ One-shot or scheduled service. We only require that the service
+    -- is **loaded** into launchd (@launchctl print@ succeeds); its state
+    -- between fires is typically @not running@, which is fine.
+    deriving stock (Eq, Show)
+
+-- | Exhaustive on 'Service' so adding a new service forces a
+-- classification decision.
+serviceExpectation :: Service -> ServiceExpectation
+serviceExpectation = \case
+    ServiceColima          -> MayBeWaiting    -- RunAtLoad once; VM survives
+    ServiceOllama          -> MustBeRunning   -- always on
+    ServiceOpenclaw        -> MustBeRunning   -- always on
+    ServiceMonitor         -> MayBeWaiting    -- every 5 min
+    ServiceWorkspaceBackup -> MayBeWaiting    -- daily 05:30
 
 -- === Agents ================================================================
 

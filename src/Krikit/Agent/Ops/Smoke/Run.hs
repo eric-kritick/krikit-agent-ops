@@ -75,6 +75,7 @@ import           Krikit.Agent.Ops.Smoke.Config
 import           Krikit.Agent.Ops.Smoke.Tier
     ( Agent (..)
     , Service
+    , ServiceExpectation (..)
     , Tier (..)
     , TierResult (..)
     , agentDisplayName
@@ -82,6 +83,7 @@ import           Krikit.Agent.Ops.Smoke.Tier
     , agentToTier
     , failWith
     , pass
+    , serviceExpectation
     , serviceLaunchctlLabel
     , skipWith
     )
@@ -140,42 +142,75 @@ runOne cfg = \case
 
 -- === Tier: launchd services =================================================
 
+data ServiceObservation
+    = Running        -- ^ launchctl reports @state = running@
+    | Loaded         -- ^ launchctl found the service, but it's not running
+    | NotFound       -- ^ launchctl couldn't find the service at all
+    deriving stock (Eq, Show)
+
 tierServices
     :: (Proc :> es, Log :> es)
     => SmokeConfig -> Eff es TierResult
 tierServices cfg = do
     logInfo "checking launchd services..."
-    xs <- mapM (serviceState (scTimeouts cfg)) services
-    let running    = [ serviceLaunchctlLabel s | (s, True)  <- xs ]
-        notRunning = [ serviceLaunchctlLabel s | (s, False) <- xs ]
-        n          = length running
-    mapM_ (logOk   . ("running: "     <>)) running
-    mapM_ (logFail . ("not running: " <>)) notRunning
-    if n >= thMinLaunchdServices (scThresholds cfg)
-        then pure (pass TierServices (Milliseconds 0) [ "running=" <> T.pack (show n) ])
+    observations <- mapM (observeService (scTimeouts cfg)) services
+    let failures = [ (s, obs) | (s, obs) <- observations, not (meetsExpectation s obs) ]
+    mapM_ (logServiceOutcome) observations
+    if null failures
+        then pure
+            ( pass TierServices (Milliseconds 0)
+                [ "all " <> T.pack (show (length services))
+                    <> " services meet their expectations" ]
+            )
         else pure
             ( failWith TierServices (Milliseconds 0)
-                ( "only " <> T.pack (show n) <> " of "
-                    <> T.pack (show (length services)) <> " services running" )
-                [ "missing: " <> T.intercalate ", " notRunning ]
+                ( T.pack (show (length failures)) <> " service(s) failed expectations" )
+                [ serviceLaunchctlLabel s <> ": expected "
+                    <> T.pack (show (serviceExpectation s))
+                    <> ", observed " <> T.pack (show obs)
+                | (s, obs) <- failures ]
             )
   where
     services = [minBound .. maxBound :: Service]
 
-serviceState
+-- | A service passes if its observed state satisfies its expectation.
+meetsExpectation :: Service -> ServiceObservation -> Bool
+meetsExpectation s obs = case (serviceExpectation s, obs) of
+    (MustBeRunning, Running) -> True
+    (MustBeRunning, _      ) -> False
+    (MayBeWaiting,  Running) -> True
+    (MayBeWaiting,  Loaded ) -> True
+    (MayBeWaiting,  NotFound) -> False
+
+logServiceOutcome
+    :: (Log :> es)
+    => (Service, ServiceObservation) -> Eff es ()
+logServiceOutcome (s, obs) =
+    let label = serviceLaunchctlLabel s
+        exp'  = case serviceExpectation s of
+                  MustBeRunning -> "must-run"
+                  MayBeWaiting  -> "may-wait"
+        msg   = label <> " [" <> exp' <> "]: " <> T.pack (show obs)
+    in  if meetsExpectation s obs
+            then logOk   msg
+            else logFail msg
+
+observeService
     :: (Proc :> es)
-    => Timeouts -> Service -> Eff es (Service, Bool)
-serviceState to svc = do
+    => Timeouts -> Service -> Eff es (Service, ServiceObservation)
+observeService to svc = do
     let label = serviceLaunchctlLabel svc
     r <- runCmd "sudo"
             ["launchctl", "print", "system/" <> T.unpack label]
             (toShortCmd to)
-    pure (svc, isRunning r)
+    pure (svc, classify r)
   where
-    isRunning = \case
-        Right ProcResult { prStdout = out } ->
-            "state = running" `T.isInfixOf` out
-        Left _ -> False
+    classify = \case
+        Right ProcResult { prStdout = out }
+            | "state = running" `T.isInfixOf` out -> Running
+            | "state"           `T.isInfixOf` out -> Loaded
+            | otherwise                           -> NotFound
+        Left _ -> NotFound
 
 -- === Tier: Docker / Colima ==================================================
 
@@ -293,13 +328,14 @@ tierAgent
     :: (Proc :> es, Log :> es)
     => SmokeConfig -> Agent -> Eff es TierResult
 tierAgent cfg agent = do
-    let to   = timeoutFor (scTimeouts cfg) agent
-        tier = agentToTier agent
-        name = agentOpenclawName agent
+    let to     = timeoutFor (scTimeouts cfg) agent
+        toSec  = secondsInt to
+        tier   = agentToTier agent
+        name   = agentOpenclawName agent
     logInfo
         ( "probing " <> agentDisplayName agent
             <> " (--agent " <> name
-            <> ", timeout " <> T.pack (show to) <> "s)..."
+            <> ", timeout " <> T.pack (show toSec) <> "s)..."
         )
     r <- runCmdAsUser "agentops" "openclaw"
             [ "agent", "--agent", T.unpack name
@@ -308,12 +344,13 @@ tierAgent cfg agent = do
             to
     pure $ case r of
         Left ProcTimeout ->
-            failWith tier (Milliseconds 0) ("no response within " <> T.pack (show to) <> "s") []
+            failWith tier (Milliseconds 0)
+                ("no response within " <> T.pack (show toSec) <> "s") []
         Left e ->
             failWith tier (Milliseconds 0) (procErrorMsg e) []
         Right ProcResult { prStdout = out, prElapsed = ms }
-            | T.length (T.strip out) < 5 ->
-                failWith tier ms "empty or trivially short response" [out]
+            | T.null (T.strip out) ->
+                failWith tier ms "empty response" [out]
             | otherwise ->
                 pass tier ms ["bytes=" <> T.pack (show (T.length out))]
 

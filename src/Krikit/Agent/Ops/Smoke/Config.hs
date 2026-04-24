@@ -55,7 +55,11 @@ data Timeouts = Timeouts
 defaultTimeouts :: Timeouts
 defaultTimeouts =
     Timeouts
-        { toSentry       = Seconds 30
+        -- Sentry is gemma4:e4b on Ollama. Cold-start (after model
+        -- eviction from RAM) is ~60s. 60 keeps us well above that
+        -- with headroom. Reduce once OLLAMA_KEEP_ALIVE=30m is
+        -- reliably in place per PB 4 known issues.
+        { toSentry       = Seconds 60
         , toWorkhorse    = Seconds 45
         , toThinker      = Seconds 120
         , toBuilder      = Seconds 120
