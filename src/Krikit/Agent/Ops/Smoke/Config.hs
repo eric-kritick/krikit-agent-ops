@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
 
 -- | Hardcoded configuration values for the smoke test.
@@ -9,18 +10,19 @@
 module Krikit.Agent.Ops.Smoke.Config
     ( SmokeConfig (..)
     , defaultConfig
+
     , Timeouts (..)
     , defaultTimeouts
+    , timeoutFor
+
     , Paths (..)
     , defaultPaths
+
     , Thresholds (..)
     , defaultThresholds
-    , AgentLabel (..)
-    , allServices
-    , agentLabels
     ) where
 
-import Data.Text (Text)
+import           Krikit.Agent.Ops.Smoke.Tier (Agent (..))
 
 -- | Top-level config bundle. Consumed by 'Krikit.Agent.Ops.Smoke.Run'.
 data SmokeConfig = SmokeConfig
@@ -33,14 +35,14 @@ data SmokeConfig = SmokeConfig
 defaultConfig :: SmokeConfig
 defaultConfig =
     SmokeConfig
-        { scTimeouts = defaultTimeouts
-        , scPaths = defaultPaths
+        { scTimeouts   = defaultTimeouts
+        , scPaths      = defaultPaths
         , scThresholds = defaultThresholds
         }
 
--- | Per-tier timeout ceilings. Values match the bash script.
+-- | Per-tier timeout ceilings (seconds). Values match the bash script.
 data Timeouts = Timeouts
-    { toSentry       :: !Int  -- seconds
+    { toSentry       :: !Int
     , toWorkhorse    :: !Int
     , toThinker      :: !Int
     , toBuilder      :: !Int
@@ -59,6 +61,15 @@ defaultTimeouts =
         , toTelegramWait = 60
         , toShortCmd     = 10
         }
+
+-- | Type-safe lookup: which timeout field applies to which agent.
+-- Exhaustive on 'Agent', so adding a new agent forces update here.
+timeoutFor :: Timeouts -> Agent -> Int
+timeoutFor t = \case
+    AgentMain      -> toSentry    t
+    AgentWorkhorse -> toWorkhorse t
+    AgentThinker   -> toThinker   t
+    AgentBuilder   -> toBuilder   t
 
 -- | Filesystem paths the smoke test reads from.
 data Paths = Paths
@@ -97,26 +108,3 @@ defaultThresholds =
         , thMinLaunchdServices  = 5
         , thErrLogScanLineCount = 200
         }
-
--- | Expected launchd services. One entry per 'Tier's "services" check.
-allServices :: [Text]
-allServices =
-    [ "ai.krikit.colima"
-    , "ai.krikit.ollama"
-    , "ai.krikit.openclaw"
-    , "ai.krikit.monitor"
-    , "ai.krikit.workspace-backup"
-    ]
-
--- | Labels used by agent tiers when invoking @openclaw agent --agent <name>@.
-newtype AgentLabel = AgentLabel Text
-    deriving stock   (Eq, Show)
-    deriving newtype (Ord)
-
-agentLabels :: [(String, AgentLabel)]
-agentLabels =
-    [ ("main",      AgentLabel "main")
-    , ("workhorse", AgentLabel "workhorse")
-    , ("thinker",   AgentLabel "thinker")
-    , ("builder",   AgentLabel "builder")
-    ]

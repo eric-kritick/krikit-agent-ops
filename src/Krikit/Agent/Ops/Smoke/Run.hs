@@ -69,13 +69,19 @@ import           Krikit.Agent.Ops.Smoke.Config
     , SmokeConfig (..)
     , Thresholds (..)
     , Timeouts (..)
-    , allServices
+    , timeoutFor
     )
 import           Krikit.Agent.Ops.Smoke.Tier
-    ( Tier (..)
+    ( Agent (..)
+    , Service
+    , Tier (..)
     , TierResult (..)
+    , agentDisplayName
+    , agentOpenclawName
+    , agentToTier
     , failWith
     , pass
+    , serviceLaunchctlLabel
     , skipWith
     )
 
@@ -118,10 +124,10 @@ runOne cfg = \case
     TierDocker    -> tierDocker    cfg
     TierOllama    -> tierOllama    cfg
     TierAudit     -> tierAudit     cfg
-    TierSentry    -> tierAgent     TierSentry    "main"      (toSentry    (scTimeouts cfg))
-    TierWorkhorse -> tierAgent     TierWorkhorse "workhorse" (toWorkhorse (scTimeouts cfg))
-    TierThinker   -> tierAgent     TierThinker   "thinker"   (toThinker   (scTimeouts cfg))
-    TierBuilder   -> tierAgent     TierBuilder   "builder"   (toBuilder   (scTimeouts cfg))
+    TierSentry    -> tierAgent     cfg AgentMain
+    TierWorkhorse -> tierAgent     cfg AgentWorkhorse
+    TierThinker   -> tierAgent     cfg AgentThinker
+    TierBuilder   -> tierAgent     cfg AgentBuilder
     TierConfig    -> tierConfig    cfg
     TierErrLog    -> tierErrLog    cfg
     TierTelegram  -> tierTelegram  cfg
@@ -133,9 +139,9 @@ tierServices
     => SmokeConfig -> Eff es TierResult
 tierServices cfg = do
     logInfo "checking launchd services..."
-    xs <- mapM (serviceState (scTimeouts cfg)) allServices
-    let running    = [ lbl | (lbl, True)  <- xs ]
-        notRunning = [ lbl | (lbl, False) <- xs ]
+    xs <- mapM (serviceState (scTimeouts cfg)) services
+    let running    = [ serviceLaunchctlLabel s | (s, True)  <- xs ]
+        notRunning = [ serviceLaunchctlLabel s | (s, False) <- xs ]
         n          = length running
     mapM_ (logOk   . ("running: "     <>)) running
     mapM_ (logFail . ("not running: " <>)) notRunning
@@ -144,16 +150,21 @@ tierServices cfg = do
         else pure
             ( failWith TierServices 0
                 ( "only " <> T.pack (show n) <> " of "
-                    <> T.pack (show (length allServices)) <> " services running" )
+                    <> T.pack (show (length services)) <> " services running" )
                 [ "missing: " <> T.intercalate ", " notRunning ]
             )
+  where
+    services = [minBound .. maxBound :: Service]
 
 serviceState
     :: (Proc :> es)
-    => Timeouts -> Text -> Eff es (Text, Bool)
-serviceState to label = do
-    r <- runCmd "sudo" ["launchctl", "print", "system/" <> T.unpack label] (toShortCmd to)
-    pure (label, isRunning r)
+    => Timeouts -> Service -> Eff es (Service, Bool)
+serviceState to svc = do
+    let label = serviceLaunchctlLabel svc
+    r <- runCmd "sudo"
+            ["launchctl", "print", "system/" <> T.unpack label]
+            (toShortCmd to)
+    pure (svc, isRunning r)
   where
     isRunning = \case
         Right ProcResult { prStdout = out } ->
@@ -274,14 +285,18 @@ smokePrompt =
 
 tierAgent
     :: (Proc :> es, Log :> es)
-    => Tier -> Text -> Int -> Eff es TierResult
-tierAgent tier agentLbl to = do
+    => SmokeConfig -> Agent -> Eff es TierResult
+tierAgent cfg agent = do
+    let to   = timeoutFor (scTimeouts cfg) agent
+        tier = agentToTier agent
+        name = agentOpenclawName agent
     logInfo
-        ( "probing agent " <> agentLbl
-            <> " (timeout " <> T.pack (show to) <> "s)..."
+        ( "probing " <> agentDisplayName agent
+            <> " (--agent " <> name
+            <> ", timeout " <> T.pack (show to) <> "s)..."
         )
     r <- runCmdAsUser "agentops" "openclaw"
-            [ "agent", "--agent", T.unpack agentLbl
+            [ "agent", "--agent", T.unpack name
             , "-m", smokePrompt
             ]
             to

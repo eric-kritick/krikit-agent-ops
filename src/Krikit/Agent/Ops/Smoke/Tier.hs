@@ -13,6 +13,17 @@ module Krikit.Agent.Ops.Smoke.Tier
     , tierName
     , tierKey
 
+      -- * Services checked by 'TierServices'
+    , Service (..)
+    , serviceLaunchctlLabel
+
+      -- * Agents exercised by 'TierSentry' / 'TierWorkhorse' / 'TierThinker' / 'TierBuilder'
+    , Agent (..)
+    , agentOpenclawName
+    , agentDisplayName
+    , agentToTier
+    , tierToAgent
+
       -- * Status of a tier run
     , TierStatus (..)
     , isFailure
@@ -76,6 +87,84 @@ tierKey = \case
     TierConfig    -> "config"
     TierErrLog    -> "errlog"
     TierTelegram  -> "telegram"
+
+-- === Services ==============================================================
+
+-- | A launchd service checked by 'TierServices'. Carrying this as an ADT
+-- instead of raw 'Text' prevents stringly-typed mistakes ("ai.krikit.colima"
+-- vs "ai.krikit.Colima") and forces update in every match when we add or
+-- rename a service.
+data Service
+    = ServiceColima
+    | ServiceOllama
+    | ServiceOpenclaw
+    | ServiceMonitor
+    | ServiceWorkspaceBackup
+    deriving stock (Eq, Show, Bounded, Enum)
+
+-- | The exact label launchctl expects, as in @launchctl print system/<label>@.
+serviceLaunchctlLabel :: Service -> Text
+serviceLaunchctlLabel = \case
+    ServiceColima          -> "ai.krikit.colima"
+    ServiceOllama          -> "ai.krikit.ollama"
+    ServiceOpenclaw        -> "ai.krikit.openclaw"
+    ServiceMonitor         -> "ai.krikit.monitor"
+    ServiceWorkspaceBackup -> "ai.krikit.workspace-backup"
+
+-- === Agents ================================================================
+
+-- | One of the four agents the smoke test exercises via the openclaw CLI.
+-- ADT rather than raw 'Text' for the same reason as 'Service': prevents
+-- typos and forces compiler-checked update on every match site.
+data Agent
+    = AgentMain       -- ^ Sentry persona (Wicket)
+    | AgentWorkhorse  -- ^ Montag
+    | AgentThinker    -- ^ Faber
+    | AgentBuilder    -- ^ Stendahl
+    deriving stock (Eq, Show, Bounded, Enum)
+
+-- | The exact label passed to @openclaw agent --agent <name>@.
+agentOpenclawName :: Agent -> Text
+agentOpenclawName = \case
+    AgentMain      -> "main"
+    AgentWorkhorse -> "workhorse"
+    AgentThinker   -> "thinker"
+    AgentBuilder   -> "builder"
+
+-- | Human-readable label for log lines / summary output.
+agentDisplayName :: Agent -> Text
+agentDisplayName = \case
+    AgentMain      -> "Sentry (Wicket)"
+    AgentWorkhorse -> "Workhorse (Montag)"
+    AgentThinker   -> "Thinker (Faber)"
+    AgentBuilder   -> "Builder (Stendahl)"
+
+-- | Every 'Agent' corresponds to exactly one 'Tier'. Useful when the
+-- orchestrator needs the tier identity for reporting.
+agentToTier :: Agent -> Tier
+agentToTier = \case
+    AgentMain      -> TierSentry
+    AgentWorkhorse -> TierWorkhorse
+    AgentThinker   -> TierThinker
+    AgentBuilder   -> TierBuilder
+
+-- | Not every 'Tier' corresponds to an 'Agent' (services / docker /
+-- ollama / etc. are non-agent tiers). Deliberately written exhaustively
+-- rather than with a catch-all @_ -> Nothing@ so the compiler flags us
+-- when a new tier is added and we forget to classify it.
+tierToAgent :: Tier -> Maybe Agent
+tierToAgent = \case
+    TierSentry    -> Just AgentMain
+    TierWorkhorse -> Just AgentWorkhorse
+    TierThinker   -> Just AgentThinker
+    TierBuilder   -> Just AgentBuilder
+    TierServices  -> Nothing
+    TierDocker    -> Nothing
+    TierOllama    -> Nothing
+    TierAudit     -> Nothing
+    TierConfig    -> Nothing
+    TierErrLog    -> Nothing
+    TierTelegram  -> Nothing
 
 -- | Outcome of a tier run. Reason is carried with the status rather than
 -- as a separate field so we can't represent "Pass with a failure reason".
