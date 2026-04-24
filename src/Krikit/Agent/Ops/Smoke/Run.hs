@@ -41,7 +41,9 @@ import qualified Data.ByteString.Lazy.Char8     as LBSC
 import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
+import qualified Data.Time                      as Time
 import qualified Data.Time.Clock.POSIX          as POSIX
+import qualified Data.Time.Format.ISO8601       as ISO8601
 
 import           Effectful                      (Eff, IOE, liftIO, (:>))
 
@@ -409,14 +411,16 @@ showValue = TE.decodeUtf8 . LBSC.toStrict . Aeson.encode
 -- === Tier: sandbox err-log scan =============================================
 
 tierErrLog
-    :: (Proc :> es, Log :> es)
+    :: (Proc :> es, Log :> es, IOE :> es)
     => SmokeConfig -> Eff es TierResult
 tierErrLog cfg = do
-    let path = pOpenclawErrLog (scPaths cfg)
-        n    = thErrLogScanLineCount (scThresholds cfg)
+    let path   = pOpenclawErrLog (scPaths cfg)
+        n      = thErrLogScanLineCount (scThresholds cfg)
+        window = thErrLogWindow (scThresholds cfg)
     logInfo
         ( "scanning last " <> T.pack (show n)
             <> " lines of " <> T.pack path
+            <> " (window=" <> T.pack (show (secondsInt window)) <> "s)"
         )
     r <- runCmd "sudo" ["tail", "-" <> show n, path] (toShortCmd (scTimeouts cfg))
     case r of
@@ -424,26 +428,63 @@ tierErrLog cfg = do
             pure (skipWith TierErrLog (Milliseconds 0) "err log not readable" [])
         Left e ->
             pure (failWith TierErrLog (Milliseconds 0) (procErrorMsg e) [])
-        Right ProcResult { prStdout = out } ->
-            pure (analyzeErrLog out)
+        Right ProcResult { prStdout = out } -> do
+            now <- liftIO Time.getCurrentTime
+            pure (analyzeErrLog now window out)
 
-analyzeErrLog :: Text -> TierResult
-analyzeErrLog out =
-    let hits = [ l | l <- T.lines out
-                   , any (`T.isInfixOf` l) sandboxErrors
-               ]
-    in  if null hits
-            then pass TierErrLog (Milliseconds 0) ["no sandbox errors in recent err log"]
-            else failWith TierErrLog (Milliseconds 0)
-                    ( T.pack (show (length hits))
-                        <> " sandbox error lines in recent log" )
-                    hits
+-- | Split sandbox-error lines into recent (inside window) and old
+-- (outside), based on each line's leading ISO-8601 timestamp. The tier
+-- fails only if there are *recent* hits; old-only hits pass with a note
+-- so the operator knows they're being tolerated.
+analyzeErrLog :: Time.UTCTime -> Seconds -> Text -> TierResult
+analyzeErrLog now window out =
+    let sandboxLines =
+            [ l | l <- T.lines out, any (`T.isInfixOf` l) sandboxErrors ]
+        dated =
+            [ (l, parseLineTimestamp l) | l <- sandboxLines ]
+        recent =
+            [ l | (l, Just t) <- dated, inWindow t ]
+        unparseable =
+            [ l | (l, Nothing) <- dated ]
+        old =
+            [ l | (l, Just t) <- dated, not (inWindow t) ]
+    in case (null recent, null unparseable, null old) of
+        -- Clean: no sandbox errors at all.
+        (True, True, True) ->
+            pass TierErrLog (Milliseconds 0)
+                ["no sandbox errors in recent err log"]
+        -- Only old hits; all outside the window. Pass with context.
+        (True, True, False) ->
+            pass TierErrLog (Milliseconds 0)
+                [ T.pack (show (length old))
+                    <> " sandbox error line(s) in log, all older than "
+                    <> T.pack (show (secondsInt window)) <> "s; tolerated"
+                ]
+        -- Any recent hits (or any unparseable lines that might be recent)
+        -- -> fail and dump them.
+        _ ->
+            failWith TierErrLog (Milliseconds 0)
+                ( T.pack (show (length recent + length unparseable))
+                    <> " recent/unparseable sandbox error line(s)" )
+                (recent ++ unparseable)
   where
+    windowNdt :: Time.NominalDiffTime
+    windowNdt = fromIntegral (secondsInt window)
+    inWindow t = Time.diffUTCTime now t <= windowNdt
     sandboxErrors =
         [ "Failed to inspect sandbox image"
         , "Cannot connect to the Docker daemon"
         , "sandbox image not found"
         ]
+
+-- | Parse the ISO-8601 timestamp at the start of an err-log line, if any.
+-- OpenClaw prefixes every line with e.g. @2026-04-22T11:08:42.726-04:00@.
+-- Falls back to 'Nothing' for multi-line-continuation lines or anything
+-- else that doesn't open with a parseable timestamp.
+parseLineTimestamp :: Text -> Maybe Time.UTCTime
+parseLineTimestamp line =
+    let prefix = T.unpack (T.takeWhile (/= ' ') line)
+    in  ISO8601.iso8601ParseM prefix
 
 -- === Tier: Telegram round-trip ==============================================
 

@@ -98,11 +98,17 @@ defaultPaths =
         , pOpenclawLogDir = "/tmp/openclaw"
         }
 
--- | Minimum thresholds that must be satisfied to count as a pass.
+-- | Minimum thresholds and scan windows for tier checks.
 data Thresholds = Thresholds
     { thMinOllamaModels      :: !Int
     , thMinLaunchdServices   :: !Int
     , thErrLogScanLineCount  :: !Int
+    -- ^ How many lines of the err log to tail.
+    , thErrLogWindow         :: !Seconds
+    -- ^ Sandbox errors older than this (wall-clock) don't count toward
+    -- failure. Smoke is a liveness check; a two-day-old Docker socket
+    -- error that's since been fixed isn't what the tier is trying to
+    -- catch.
     }
     deriving stock (Eq, Show)
 
@@ -112,4 +118,5 @@ defaultThresholds =
         { thMinOllamaModels     = 4
         , thMinLaunchdServices  = 5
         , thErrLogScanLineCount = 200
+        , thErrLogWindow        = Seconds 1800   -- 30 minutes
         }
