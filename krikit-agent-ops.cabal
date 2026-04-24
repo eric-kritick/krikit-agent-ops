@@ -30,7 +30,7 @@ common deps
 
 library
     import:           warnings, deps
-    exposed-modules:  Krikit.Version
+    exposed-modules:  Krikit.Agent.Ops.Version
     hs-source-dirs:   src
     default-language: GHC2021
 

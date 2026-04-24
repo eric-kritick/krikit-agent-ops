@@ -1,6 +1,6 @@
 module Main (main) where
 
-import qualified Krikit.Version as V
+import qualified Krikit.Agent.Ops.Version as V
 
 main :: IO ()
 main =

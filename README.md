@@ -31,8 +31,9 @@ This drops native binaries straight into PATH. `krikit-update-ops`
 
 ## Structure
 
-- `src/Krikit/*` — shared library (subprocess, JSON, output helpers).
+- `src/Krikit/Agent/Ops/*` — shared library (subprocess, JSON, output helpers).
 - `app/<tool>/Main.hs` — one executable per tool.
 - `test/Spec.hs` — HSpec + QuickCheck.
 
-See `AGENTS.md` for conventions.
+All modules live under `Krikit.Agent.Ops`. See `AGENTS.md` for
+full conventions (types, effects, errors, style, anti-patterns).

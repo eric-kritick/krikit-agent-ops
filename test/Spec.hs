@@ -1,7 +1,7 @@
 module Main (main) where
 
-import qualified Krikit.Version as V
-import           System.Exit (exitFailure)
+import qualified Krikit.Agent.Ops.Version as V
+import           System.Exit              (exitFailure)
 
 main :: IO ()
 main = do
