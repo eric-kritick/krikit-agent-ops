@@ -30,19 +30,24 @@ All modules live under `Krikit.Agent.Ops.*`.
 
 ```
 src/Krikit/Agent/Ops/
-    Version.hs               shared: package version
-    Process.hs               shared: typed-process wrappers
-    Output.hs                shared: pretty + JSON Lines formatters
-    Http.hs                  shared: http-client wrappers
-    Smoke/                   smoke-test-specific modules
-        Tier.hs              tier ADTs + results
-        Run.hs               orchestration
-        Report.hs            formatter/history
+    Units.hs                 shared: Seconds, Milliseconds newtypes
+    Effect/
+        Log.hs               effect: structured log output
+        Probe.hs             effect: HTTP GET / POST probes
+        Proc.hs              effect: subprocess with bounded timeout
+    Smoke/
+        Tier.hs              Tier / Service / Agent ADTs + results
+        Config.hs            timeouts, paths, thresholds (pure values)
+        Report.hs            pretty summary + JSON Lines history
+        Run.hs               orchestration + per-tier runners
 
-app/smoke/Main.hs            krikit-smoke entrypoint
+app/smoke/Main.hs            krikit-smoke entrypoint (argparse + wiring)
 app/<future-tool>/Main.hs    one directory per executable
 
-test/Spec.hs                 hspec + quickcheck test suite
+test/
+    Spec.hs                                  hspec entry
+    Krikit/Agent/Ops/Smoke/TierSpec.hs       pure Tier helpers
+    Krikit/Agent/Ops/Smoke/RunSpec.hs        tiers w/ mock handlers
 ```
 
 Rules:

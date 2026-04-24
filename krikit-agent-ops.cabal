@@ -44,7 +44,6 @@ library
     import:           warnings, deps
     exposed-modules:
         Krikit.Agent.Ops.Units
-        Krikit.Agent.Ops.Version
         Krikit.Agent.Ops.Effect.Log
         Krikit.Agent.Ops.Effect.Probe
         Krikit.Agent.Ops.Effect.Proc
