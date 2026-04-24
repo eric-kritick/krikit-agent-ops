@@ -51,6 +51,12 @@ import           Effectful.TH                (makeEffect)
 
 import qualified System.Process.Typed        as TP
 
+import           Krikit.Agent.Ops.Units
+    ( Milliseconds (..)
+    , Seconds
+    , secondsToMicros
+    )
+
 -- | Why a subprocess invocation failed.
 data ProcError
     = ProcTimeout             -- ^ wall-clock ceiling exceeded
@@ -62,18 +68,18 @@ data ProcError
 data ProcResult = ProcResult
     { prStdout    :: !Text
     , prStderr    :: !Text
-    , prElapsedMs :: !Int
+    , prElapsed   :: !Milliseconds
     }
     deriving stock (Eq, Show)
 
 data Proc :: Effect where
-    -- | Run a command directly with args, bounded by N seconds.
-    RunCmd       :: FilePath -> [String] -> Int
+    -- | Run a command directly with args, bounded by a wall-clock budget.
+    RunCmd       :: FilePath -> [String] -> Seconds
                  -> Proc m (Either ProcError ProcResult)
 
     -- | Run as another user via @sudo -u USER -i CMD...@. "-i" is a
     -- login shell so the target user's PATH/profile apply.
-    RunCmdAsUser :: Text -> FilePath -> [String] -> Int
+    RunCmdAsUser :: Text -> FilePath -> [String] -> Seconds
                  -> Proc m (Either ProcError ProcResult)
 
 makeEffect ''Proc
@@ -87,13 +93,13 @@ runProcIO = interpret $ \_ -> \case
         liftIO $
             runReal "sudo" (["-u", T.unpack user, "-i", cmd] ++ args) to
 
-runReal :: FilePath -> [String] -> Int -> IO (Either ProcError ProcResult)
-runReal cmd args toSec = do
+runReal :: FilePath -> [String] -> Seconds -> IO (Either ProcError ProcResult)
+runReal cmd args to = do
     started <- wallMs
     result  <- try @SomeException $
-        timeout (toSec * 1_000_000) (TP.readProcess (TP.proc cmd args))
+        timeout (secondsToMicros to) (TP.readProcess (TP.proc cmd args))
     ended   <- wallMs
-    let elapsed = ended - started
+    let elapsed = Milliseconds (unMs ended - unMs started)
     pure $ case result of
         Left e            -> Left (ProcLaunchErr (T.pack (show e)))
         Right Nothing     -> Left ProcTimeout
@@ -101,11 +107,12 @@ runReal cmd args toSec = do
             ExitSuccess   -> Right (mkOk out err elapsed)
             ExitFailure n -> Left (ProcNonZero n)
   where
+    unMs (Milliseconds n) = n
     mkOk out err elapsed =
         ProcResult
-            { prStdout    = decodeLenient out
-            , prStderr    = decodeLenient err
-            , prElapsedMs = elapsed
+            { prStdout  = decodeLenient out
+            , prStderr  = decodeLenient err
+            , prElapsed = elapsed
             }
 
 -- | Decode bytes to Text, replacing invalid UTF-8 with U+FFFD rather
@@ -116,11 +123,11 @@ decodeLenient = TE.decodeUtf8With TE.lenientDecode . LBS.toStrict
 
 -- | Wall-clock in milliseconds. Good enough for elapsed-time bookkeeping;
 -- no monotonic guarantees, which we don't need for human-readable reports.
-wallMs :: IO Int
+wallMs :: IO Milliseconds
 wallMs = do
     t <- Time.getCurrentTime
     let diffSeconds = Time.diffUTCTime t refEpoch
-    pure (floor (diffSeconds * 1000))
+    pure (Milliseconds (floor (diffSeconds * 1000)))
   where
     refEpoch = Time.UTCTime (Time.fromGregorian 2020 1 1) 0
 
@@ -131,7 +138,7 @@ wallMs = do
 type MockResponse = Either ProcError ProcResult
 
 -- | Helper for building a canned successful response.
-mockResponse :: Text -> Text -> Int -> MockResponse
+mockResponse :: Text -> Text -> Milliseconds -> MockResponse
 mockResponse stdout_ stderr_ elapsed =
     Right (ProcResult stdout_ stderr_ elapsed)
 

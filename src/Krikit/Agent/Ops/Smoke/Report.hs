@@ -47,6 +47,10 @@ import           Krikit.Agent.Ops.Smoke.Tier
     , tierKey
     , tierName
     )
+import           Krikit.Agent.Ops.Units
+    ( Milliseconds (..)
+    , millisInt
+    )
 
 -- | Rendered, human-readable summary block for stdout.
 renderSummary :: [TierResult] -> Text
@@ -54,7 +58,9 @@ renderSummary results =
     T.intercalate "\n" $
         [ ""
         , "== Summary =="
-        , "  duration: " <> T.pack (show (sum (map trElapsedMs results))) <> " ms"
+        , "  duration: "
+            <> T.pack (show (sum (map (millisInt . trElapsed) results)))
+            <> " ms"
         , "  results:"
         ]
         ++ map resultLine results
@@ -66,7 +72,7 @@ resultLine r =
         <> statusTag (trStatus r)
         <> " "
         <> tierName (trTier r)
-        <> "  (" <> T.pack (show (trElapsedMs r)) <> " ms)"
+        <> "  (" <> T.pack (show (millisInt (trElapsed r))) <> " ms)"
         <> reasonSuffix (trStatus r)
 
 statusTag :: TierStatus -> Text
@@ -91,20 +97,20 @@ verdict results =
 
 -- | Aggregate record serialized to the history log, one per run.
 data Summary = Summary
-    { sWhen       :: !UTCTime
-    , sDurationMs :: !Int
-    , sResults    :: ![TierResult]
-    , sCounts     :: !Counts
+    { sWhen     :: !UTCTime
+    , sDuration :: !Milliseconds
+    , sResults  :: ![TierResult]
+    , sCounts   :: !Counts
     }
     deriving stock (Eq, Show)
 
 buildSummary :: UTCTime -> [TierResult] -> Summary
 buildSummary t rs =
     Summary
-        { sWhen       = t
-        , sDurationMs = sum (map trElapsedMs rs)
-        , sResults    = rs
-        , sCounts     = countResults rs
+        { sWhen     = t
+        , sDuration = Milliseconds (sum (map (millisInt . trElapsed) rs))
+        , sResults  = rs
+        , sCounts   = countResults rs
         }
 
 -- | One JSON line terminated by a newline, suitable for append-only
@@ -115,10 +121,10 @@ historyLine s = Aeson.encode s <> LBSC.pack "\n"
 instance ToJSON Summary where
     toJSON s =
         Aeson.object
-            [ "when"     .= formatISO8601 (sWhen s)
-            , "duration_ms" .= sDurationMs s
-            , "counts"   .= sCounts s
-            , "results"  .= sResults s
+            [ "when"        .= formatISO8601 (sWhen s)
+            , "duration_ms" .= millisInt (sDuration s)
+            , "counts"      .= sCounts s
+            , "results"     .= sResults s
             ]
 
 instance ToJSON Counts where
@@ -132,11 +138,11 @@ instance ToJSON Counts where
 instance ToJSON TierResult where
     toJSON r =
         Aeson.object
-            [ "tier"    .= tierKey (trTier r)
-            , "status"  .= statusJson (trStatus r)
-            , "reason"  .= statusReason (trStatus r)
-            , "elapsed_ms" .= trElapsedMs r
-            , "details" .= trDetails r
+            [ "tier"       .= tierKey (trTier r)
+            , "status"     .= statusJson (trStatus r)
+            , "reason"     .= statusReason (trStatus r)
+            , "elapsed_ms" .= millisInt (trElapsed r)
+            , "details"    .= trDetails r
             ]
 
 statusJson :: TierStatus -> Text

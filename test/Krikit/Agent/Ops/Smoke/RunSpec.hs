@@ -12,7 +12,7 @@ import           Test.Hspec
 import           Effectful                       (runPureEff)
 
 import           Krikit.Agent.Ops.Effect.Log     (runLogSilent)
-import           Krikit.Agent.Ops.Effect.Probe   (runProbeMock)
+import           Krikit.Agent.Ops.Effect.Probe   (Url (..), runProbeMock)
 import           Krikit.Agent.Ops.Effect.Proc    (runProcMock)
 import           Krikit.Agent.Ops.Smoke.Config   (defaultConfig)
 import           Krikit.Agent.Ops.Smoke.Run      (tierOllama)
@@ -29,7 +29,7 @@ spec = describe "tierOllama" $ do
                 \{\"name\":\"gemma4:26b\"},\
                 \{\"name\":\"nomic-embed-text\"}]}"
             probes = Map.fromList
-                [ ( "http://127.0.0.1:11434/api/tags", Right happyBody ) ]
+                [ ( Url "http://127.0.0.1:11434/api/tags", Right happyBody ) ]
             result = runPureEff
                    . runLogSilent
                    . runProcMock Map.empty
@@ -40,7 +40,7 @@ spec = describe "tierOllama" $ do
     it "fails when /api/tags returns too few models" $ do
         let skinnyBody = "{\"models\":[{\"name\":\"only-one\"}]}"
             probes = Map.fromList
-                [ ( "http://127.0.0.1:11434/api/tags", Right skinnyBody ) ]
+                [ ( Url "http://127.0.0.1:11434/api/tags", Right skinnyBody ) ]
             result = runPureEff
                    . runLogSilent
                    . runProcMock Map.empty

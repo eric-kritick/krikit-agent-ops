@@ -54,6 +54,7 @@ import           Krikit.Agent.Ops.Effect.Log
 import           Krikit.Agent.Ops.Effect.Probe
     ( Probe
     , ProbeError (..)
+    , Url (..)
     , httpGet
     , httpPost
     )
@@ -83,6 +84,11 @@ import           Krikit.Agent.Ops.Smoke.Tier
     , pass
     , serviceLaunchctlLabel
     , skipWith
+    )
+import           Krikit.Agent.Ops.Units
+    ( Milliseconds (..)
+    , Seconds (..)
+    , secondsInt
     )
 
 -- | Runtime options from the command line.
@@ -146,9 +152,9 @@ tierServices cfg = do
     mapM_ (logOk   . ("running: "     <>)) running
     mapM_ (logFail . ("not running: " <>)) notRunning
     if n >= thMinLaunchdServices (scThresholds cfg)
-        then pure (pass TierServices 0 [ "running=" <> T.pack (show n) ])
+        then pure (pass TierServices (Milliseconds 0) [ "running=" <> T.pack (show n) ])
         else pure
-            ( failWith TierServices 0
+            ( failWith TierServices (Milliseconds 0)
                 ( "only " <> T.pack (show n) <> " of "
                     <> T.pack (show (length services)) <> " services running" )
                 [ "missing: " <> T.intercalate ", " notRunning ]
@@ -188,11 +194,11 @@ tierDocker cfg = do
     pure $ case r of
         Right ProcResult { prStdout = out }
             | not (T.null (T.strip out)) ->
-                pass TierDocker 0 ["server=" <> T.strip out]
+                pass TierDocker (Milliseconds 0) ["server=" <> T.strip out]
         Right _ ->
-            failWith TierDocker 0 "docker info returned empty output" []
+            failWith TierDocker (Milliseconds 0) "docker info returned empty output" []
         Left e ->
-            failWith TierDocker 0 (procErrorMsg e) []
+            failWith TierDocker (Milliseconds 0) (procErrorMsg e) []
 
 -- === Tier: Ollama ===========================================================
 
@@ -201,22 +207,22 @@ tierOllama
     => SmokeConfig -> Eff es TierResult
 tierOllama cfg = do
     logInfo "querying ollama /api/tags..."
-    r <- httpGet "http://127.0.0.1:11434/api/tags"
+    r <- httpGet (Url "http://127.0.0.1:11434/api/tags")
     case r of
-        Left e  -> pure (failWith TierOllama 0 (probeErrorMsg e) [])
+        Left e  -> pure (failWith TierOllama (Milliseconds 0) (probeErrorMsg e) [])
         Right b -> pure (parseOllama cfg b)
 
 parseOllama :: SmokeConfig -> Text -> TierResult
 parseOllama cfg body =
     case Aeson.decode @Value (LBSC.pack (T.unpack body)) of
-        Nothing -> failWith TierOllama 0 "unparseable JSON from /api/tags" []
+        Nothing -> failWith TierOllama (Milliseconds 0) "unparseable JSON from /api/tags" []
         Just v  ->
             let n    = ollamaModelCount v
                 need = thMinOllamaModels (scThresholds cfg)
             in  if n >= need
-                    then pass TierOllama 0
+                    then pass TierOllama (Milliseconds 0)
                             ["models=" <> T.pack (show n)]
-                    else failWith TierOllama 0
+                    else failWith TierOllama (Milliseconds 0)
                             ( "only " <> T.pack (show n)
                                 <> " models present, want >= "
                                 <> T.pack (show need) )
@@ -236,21 +242,21 @@ tierAudit
     => SmokeConfig -> Eff es TierResult
 tierAudit _ = do
     logInfo "running openclaw security audit..."
-    r <- runCmdAsUser "agentops" "openclaw" ["security", "audit"] 30
+    r <- runCmdAsUser "agentops" "openclaw" ["security", "audit"] (Seconds 30)
     case r of
-        Left e  -> pure (failWith TierAudit 0 (procErrorMsg e) [])
+        Left e  -> pure (failWith TierAudit (Milliseconds 0) (procErrorMsg e) [])
         Right ProcResult { prStdout = out } -> pure (parseAudit out)
 
 parseAudit :: Text -> TierResult
 parseAudit out =
     case filter ("critical" `T.isInfixOf`) (T.lines out) of
-        []      -> failWith TierAudit 0 "no summary line found in audit output" []
+        []      -> failWith TierAudit (Milliseconds 0) "no summary line found in audit output" []
         (s : _) ->
             let crit = countBefore "critical" s
                 warn = countBefore "warn" s
             in  if crit == Just 0 && warn == Just 0
-                    then pass TierAudit 0 [T.strip s]
-                    else failWith TierAudit 0
+                    then pass TierAudit (Milliseconds 0) [T.strip s]
+                    else failWith TierAudit (Milliseconds 0)
                             ( "audit: critical="
                                 <> maybe "?" (T.pack . show) crit
                                 <> " warn="
@@ -302,10 +308,10 @@ tierAgent cfg agent = do
             to
     pure $ case r of
         Left ProcTimeout ->
-            failWith tier 0 ("no response within " <> T.pack (show to) <> "s") []
+            failWith tier (Milliseconds 0) ("no response within " <> T.pack (show to) <> "s") []
         Left e ->
-            failWith tier 0 (procErrorMsg e) []
-        Right ProcResult { prStdout = out, prElapsedMs = ms }
+            failWith tier (Milliseconds 0) (procErrorMsg e) []
+        Right ProcResult { prStdout = out, prElapsed = ms }
             | T.length (T.strip out) < 5 ->
                 failWith tier ms "empty or trivially short response" [out]
             | otherwise ->
@@ -321,13 +327,13 @@ tierConfig cfg = do
     logInfo ("reading " <> T.pack path <> "...")
     r <- runCmd "sudo" ["cat", path] (toShortCmd (scTimeouts cfg))
     case r of
-        Left e  -> pure (failWith TierConfig 0 (procErrorMsg e) [])
+        Left e  -> pure (failWith TierConfig (Milliseconds 0) (procErrorMsg e) [])
         Right ProcResult { prStdout = out } -> pure (parseConfig out)
 
 parseConfig :: Text -> TierResult
 parseConfig body =
     case Aeson.decode @Value (LBSC.pack (T.unpack body)) of
-        Nothing -> failWith TierConfig 0 "config is not valid JSON" []
+        Nothing -> failWith TierConfig (Milliseconds 0) "config is not valid JSON" []
         Just v  ->
             let deny      = readPath v ["tools", "deny"]
                 sandbox   = readPath v ["agents", "defaults", "sandbox", "mode"]
@@ -338,18 +344,18 @@ parseConfig body =
                 sandboxOk = sandbox == String "all"
             in case (denyOk, sandboxOk) of
                 (True, True)   ->
-                    pass TierConfig 0
+                    pass TierConfig (Milliseconds 0)
                         [ "tools.deny contains group:web"
                         , "sandbox.mode=all"
                         ]
                 (False, True)  ->
-                    failWith TierConfig 0 "tools.deny missing group:web" []
+                    failWith TierConfig (Milliseconds 0) "tools.deny missing group:web" []
                 (True, False)  ->
-                    failWith TierConfig 0
+                    failWith TierConfig (Milliseconds 0)
                         ( "sandbox.mode != all (got " <> showValue sandbox <> ")" )
                         []
                 (False, False) ->
-                    failWith TierConfig 0
+                    failWith TierConfig (Milliseconds 0)
                         "tools.deny + sandbox.mode both wrong" []
 
 readPath :: Value -> [Text] -> Value
@@ -378,9 +384,9 @@ tierErrLog cfg = do
     r <- runCmd "sudo" ["tail", "-" <> show n, path] (toShortCmd (scTimeouts cfg))
     case r of
         Left (ProcLaunchErr _) ->
-            pure (skipWith TierErrLog 0 "err log not readable" [])
+            pure (skipWith TierErrLog (Milliseconds 0) "err log not readable" [])
         Left e ->
-            pure (failWith TierErrLog 0 (procErrorMsg e) [])
+            pure (failWith TierErrLog (Milliseconds 0) (procErrorMsg e) [])
         Right ProcResult { prStdout = out } ->
             pure (analyzeErrLog out)
 
@@ -390,8 +396,8 @@ analyzeErrLog out =
                    , any (`T.isInfixOf` l) sandboxErrors
                ]
     in  if null hits
-            then pass TierErrLog 0 ["no sandbox errors in recent err log"]
-            else failWith TierErrLog 0
+            then pass TierErrLog (Milliseconds 0) ["no sandbox errors in recent err log"]
+            else failWith TierErrLog (Milliseconds 0)
                     ( T.pack (show (length hits))
                         <> " sandbox error lines in recent log" )
                     hits
@@ -413,7 +419,7 @@ tierTelegram cfg = do
     envRes <- runCmd "sudo" ["cat", pChannelsEnv paths] (toShortCmd (scTimeouts cfg))
     case envRes of
         Left _ ->
-            pure (skipWith TierTelegram 0 "channels.env not readable" [])
+            pure (skipWith TierTelegram (Milliseconds 0) "channels.env not readable" [])
         Right ProcResult { prStdout = envBody } ->
             case ( lookupEnv "TELEGRAM_BOT_TOKEN"     envBody
                  , lookupEnv "TELEGRAM_ALERT_CHAT_ID" envBody
@@ -421,7 +427,7 @@ tierTelegram cfg = do
                 (Just token, Just chatId) ->
                     runTelegramProbe cfg token chatId
                 _ ->
-                    pure (skipWith TierTelegram 0 "telegram creds missing" [])
+                    pure (skipWith TierTelegram (Milliseconds 0) "telegram creds missing" [])
 
 runTelegramProbe
     :: (Proc :> es, Probe :> es, Log :> es, IOE :> es)
@@ -430,12 +436,12 @@ runTelegramProbe cfg token chatId = do
     nonce <- liftIO freshNonce
     let body = "[smoke] nonce=" <> nonce
                  <> " (krikit-smoke round-trip probe; safe to ignore)"
-        url  = "https://api.telegram.org/bot" <> T.unpack token <> "/sendMessage"
+        url  = Url ("https://api.telegram.org/bot" <> token <> "/sendMessage")
     logInfo ("posting to telegram with nonce=" <> nonce)
     sendRes <- httpPost url [("chat_id", chatId), ("text", body)]
     case sendRes of
         Left e ->
-            pure ( failWith TierTelegram 0
+            pure ( failWith TierTelegram (Milliseconds 0)
                      ("sendMessage: " <> probeErrorMsg e) [] )
         Right _ ->
             pollForNonce cfg nonce
@@ -451,21 +457,22 @@ pollForNonce cfg nonce =
     maxWait = toTelegramWait (scTimeouts cfg)
 
     loop i
-        | i >= maxWait =
-            pure ( failWith TierTelegram 0
+        | i >= secondsInt maxWait =
+            pure ( failWith TierTelegram (Milliseconds 0)
                      ( "nonce not observed in openclaw log after "
-                         <> T.pack (show maxWait) <> "s" )
+                         <> T.pack (show (secondsInt maxWait)) <> "s" )
                      [] )
         | otherwise = do
             liftIO (threadDelay 1_000_000)
-            r <- runCmd "sudo" ["sh", "-c", grepCmd] 5
+            r <- runCmd "sudo" ["sh", "-c", grepCmd] (Seconds 5)
             case r of
                 Right ProcResult { prStdout = out }
                     | nonce `T.isInfixOf` out ->
-                        pure ( pass TierTelegram (i * 1000)
+                        pure ( pass TierTelegram (Milliseconds (i * 1000))
                                  [ "nonce observed after "
                                      <> T.pack (show i) <> "s" ] )
-                _ -> loop (i + 1)
+                Right _ -> loop (i + 1)
+                Left  _ -> loop (i + 1)
 
     grepCmd =
         "grep -l '" <> T.unpack nonce

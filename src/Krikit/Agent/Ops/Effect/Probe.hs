@@ -16,6 +16,8 @@ module Krikit.Agent.Ops.Effect.Probe
     ( -- * Effect
       Probe
     , ProbeError (..)
+    , Url (..)
+    , urlString
 
       -- * Smart constructors
     , httpGet
@@ -51,11 +53,22 @@ data ProbeError
     | ProbeStatus  !Int         -- ^ server returned non-2xx
     deriving stock (Eq, Show)
 
+-- | Typed wrapper for a URL. Prevents accidentally passing a path or
+-- a free-form string where a URL was expected. Constructor is exported
+-- because URLs in this codebase always come from config + literal
+-- concatenation — there's no need for smart validation.
+newtype Url = Url Text
+    deriving stock   (Eq, Show)
+    deriving newtype (Ord)
+
+urlString :: Url -> String
+urlString (Url u) = T.unpack u
+
 data Probe :: Effect where
-    HttpGet  :: String -> Probe m (Either ProbeError Text)
+    HttpGet  :: Url -> Probe m (Either ProbeError Text)
 
     -- | Form-encoded POST; for Telegram's sendMessage. (chat_id, text) pairs.
-    HttpPost :: String -> [(Text, Text)] -> Probe m (Either ProbeError Text)
+    HttpPost :: Url -> [(Text, Text)] -> Probe m (Either ProbeError Text)
 
 makeEffect ''Probe
 
@@ -65,9 +78,9 @@ makeEffect ''Probe
 runProbeIO :: IOE :> es => Manager -> Eff (Probe : es) a -> Eff es a
 runProbeIO mgr = interpret $ \_ -> \case
     HttpGet url ->
-        liftIO (performGet mgr url)
+        liftIO (performGet mgr (urlString url))
     HttpPost url params ->
-        liftIO (performPost mgr url params)
+        liftIO (performPost mgr (urlString url) params)
 
 -- | Convenience: build the default TLS Manager if the caller doesn't
 -- want to manage one themselves.
@@ -114,10 +127,10 @@ decodeLenient = TE.decodeUtf8With TE.lenientDecode . LBS.toStrict
 
 -- === Mock handler ===========================================================
 
--- | Mock handler: responses keyed by URL string. Covers both GET and POST
+-- | Mock handler: responses keyed by URL. Covers both GET and POST
 -- cases (POST bodies aren't asserted in v1 tests).
 runProbeMock
-    :: Map String (Either ProbeError Text)
+    :: Map Url (Either ProbeError Text)
     -> Eff (Probe : es) a
     -> Eff es a
 runProbeMock responses = interpret $ \_ -> \case
@@ -126,8 +139,8 @@ runProbeMock responses = interpret $ \_ -> \case
     HttpPost url _ ->
         pure (lookupMock url)
   where
-    lookupMock k =
+    lookupMock k@(Url raw) =
         case Map.lookup k responses of
             Just r  -> r
-            Nothing -> Left (ProbeNetwork ("no mock for " <> T.pack k))
+            Nothing -> Left (ProbeNetwork ("no mock for " <> raw))
 

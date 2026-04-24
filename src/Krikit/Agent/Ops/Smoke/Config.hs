@@ -23,6 +23,7 @@ module Krikit.Agent.Ops.Smoke.Config
     ) where
 
 import           Krikit.Agent.Ops.Smoke.Tier (Agent (..))
+import           Krikit.Agent.Ops.Units      (Seconds (..))
 
 -- | Top-level config bundle. Consumed by 'Krikit.Agent.Ops.Smoke.Run'.
 data SmokeConfig = SmokeConfig
@@ -40,31 +41,31 @@ defaultConfig =
         , scThresholds = defaultThresholds
         }
 
--- | Per-tier timeout ceilings (seconds). Values match the bash script.
+-- | Per-tier timeout ceilings. Values match the bash script.
 data Timeouts = Timeouts
-    { toSentry       :: !Int
-    , toWorkhorse    :: !Int
-    , toThinker      :: !Int
-    , toBuilder      :: !Int
-    , toTelegramWait :: !Int  -- how long to wait for nonce to appear in log
-    , toShortCmd     :: !Int  -- short commands (launchctl, docker info, ...)
+    { toSentry       :: !Seconds
+    , toWorkhorse    :: !Seconds
+    , toThinker      :: !Seconds
+    , toBuilder      :: !Seconds
+    , toTelegramWait :: !Seconds  -- how long to wait for nonce in the log
+    , toShortCmd     :: !Seconds  -- short commands (launchctl, docker info, ...)
     }
     deriving stock (Eq, Show)
 
 defaultTimeouts :: Timeouts
 defaultTimeouts =
     Timeouts
-        { toSentry       = 30
-        , toWorkhorse    = 45
-        , toThinker      = 120
-        , toBuilder      = 120
-        , toTelegramWait = 60
-        , toShortCmd     = 10
+        { toSentry       = Seconds 30
+        , toWorkhorse    = Seconds 45
+        , toThinker      = Seconds 120
+        , toBuilder      = Seconds 120
+        , toTelegramWait = Seconds 60
+        , toShortCmd     = Seconds 10
         }
 
 -- | Type-safe lookup: which timeout field applies to which agent.
 -- Exhaustive on 'Agent', so adding a new agent forces update here.
-timeoutFor :: Timeouts -> Agent -> Int
+timeoutFor :: Timeouts -> Agent -> Seconds
 timeoutFor t = \case
     AgentMain      -> toSentry    t
     AgentWorkhorse -> toWorkhorse t

@@ -15,7 +15,6 @@ module Krikit.Agent.Ops.Effect.Log
     ( -- * Effect
       Log
     , LogLevel (..)
-    , LogMessage
 
       -- * Smart constructors
     , logInfo
@@ -38,10 +37,6 @@ import           Effectful.TH                (makeEffect)
 -- | Severity level for a log line.
 data LogLevel = Info | Ok | Fail | Skip
     deriving stock (Eq, Show)
-
--- | A log message is a level + body. Used by collect-style handlers for
--- test assertions.
-type LogMessage = (LogLevel, Text)
 
 data Log :: Effect where
     LogLine :: LogLevel -> Text -> Log m ()

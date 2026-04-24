@@ -16,6 +16,7 @@ import           Krikit.Agent.Ops.Smoke.Tier
     , tierKey
     , tierName
     )
+import           Krikit.Agent.Ops.Units      (Milliseconds (..))
 
 spec :: Spec
 spec = do
@@ -33,24 +34,24 @@ spec = do
     describe "countResults" $ do
         it "counts pass / fail / skip" $ do
             let rs =
-                    [ pass     TierOllama    10 []
-                    , failWith TierSentry   20 "flake" []
-                    , skipWith TierTelegram  0 "no creds" []
-                    , pass     TierAudit     5 []
+                    [ pass     TierOllama   (Milliseconds 10) []
+                    , failWith TierSentry   (Milliseconds 20) "flake" []
+                    , skipWith TierTelegram (Milliseconds  0) "no creds" []
+                    , pass     TierAudit    (Milliseconds  5) []
                     ]
             countResults rs `shouldBe` Counts { cPass = 2, cFail = 1, cSkip = 1 }
 
     describe "allPassed" $ do
         it "is true when no tier has Fail status" $ do
             let rs =
-                    [ pass     TierOllama  5 []
-                    , skipWith TierTelegram 0 "no creds" []
+                    [ pass     TierOllama   (Milliseconds 5) []
+                    , skipWith TierTelegram (Milliseconds 0) "no creds" []
                     ]
             allPassed rs `shouldBe` True
 
         it "is false if any tier is Fail" $ do
             let rs =
-                    [ pass     TierOllama  5 []
-                    , failWith TierSentry  20 "flake" []
+                    [ pass     TierOllama  (Milliseconds  5) []
+                    , failWith TierSentry  (Milliseconds 20) "flake" []
                     ]
             allPassed rs `shouldBe` False

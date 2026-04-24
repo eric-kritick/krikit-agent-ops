@@ -106,6 +106,36 @@ the value has a meaning. A function signature of
 reader (and the compiler) what each argument is; `Text -> Int -> IO _`
 tells them nothing.
 
+### Numbers with a unit always get a newtype
+
+Whenever a number in the domain carries a unit — seconds,
+milliseconds, bytes, lines, count — wrap it. The cost is a newtype
+declaration plus one helper; the payoff is a compile-time error the
+first time someone tries to pass milliseconds where seconds were
+expected (exactly the bug `timeout (n * 1_000_000)` is prone to).
+
+```haskell
+newtype Seconds = Seconds Int
+    deriving stock   (Eq, Show)
+    deriving newtype (Ord)
+
+newtype Milliseconds = Milliseconds Int
+    deriving stock   (Eq, Show)
+    deriving newtype (Ord)
+
+secondsToMicros :: Seconds -> Int
+secondsToMicros (Seconds n) = n * 1_000_000
+```
+
+Deliberately **no** `Num` instance — that would let `Seconds *
+Seconds` typecheck (dimensionally wrong), which defeats the whole
+point. If arithmetic within the unit is needed, export named
+helpers (`addSeconds`, `halfSeconds`) rather than typeclass magic.
+
+Pattern: `Krikit.Agent.Ops.Units` holds the shared units for this
+repo. Add new units there. Conversions between units are explicit
+named functions, never implicit.
+
 ### Exhaustive pattern matching
 
 `-Wall` turns on `-Wincomplete-patterns` — non-exhaustive matches are
@@ -126,9 +156,20 @@ formatStatus Pass = "OK"
 formatStatus _    = "not OK"
 ```
 
-Catch-all patterns are only acceptable for open/unbounded domains
-(parsing arbitrary text, handling `IOError` whose constructors are
-many). For every ADT you control, write every case.
+Catch-all patterns are only acceptable for:
+
+- **Types you don't own** with many stable constructors (`Aeson.Value`,
+  `IOError`, `ExitCode`). Even here, handle the specific cases you
+  care about explicitly and let the rest fall through, with a comment.
+- **Intentional "everything else is handled the same"** branches (like a
+  polling loop where every error means "try again"). In those cases,
+  write the branches out anyway — `Right _ -> retry; Left _ -> retry`
+  is only four more lines than `_ -> retry` and makes the intent
+  obvious.
+
+For every ADT we control in this repo (`Tier`, `Service`, `Agent`,
+`TierStatus`, `ProcError`, `ProbeError`, `LogLevel`, ...), write
+every case.
 
 ### Records with named fields
 

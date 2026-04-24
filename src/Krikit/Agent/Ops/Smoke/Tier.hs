@@ -42,6 +42,8 @@ module Krikit.Agent.Ops.Smoke.Tier
 
 import Data.Text (Text)
 
+import Krikit.Agent.Ops.Units (Milliseconds (..))
+
 -- | All tiers the smoke test knows about. Bounded+Enum so we can iterate.
 data Tier
     = TierServices
@@ -183,21 +185,21 @@ isFailure = \case
 -- | One tier's full result: which tier, how it fared, how long it took,
 -- and optional extra lines (e.g. a metrics summary or command output).
 data TierResult = TierResult
-    { trTier      :: !Tier
-    , trStatus    :: !TierStatus
-    , trElapsedMs :: !Int
-    , trDetails   :: ![Text]
+    { trTier    :: !Tier
+    , trStatus  :: !TierStatus
+    , trElapsed :: !Milliseconds
+    , trDetails :: ![Text]
     }
     deriving stock (Eq, Show)
 
 -- | Smart constructors.
-pass :: Tier -> Int -> [Text] -> TierResult
+pass :: Tier -> Milliseconds -> [Text] -> TierResult
 pass t ms ds = TierResult t Pass ms ds
 
-failWith :: Tier -> Int -> Text -> [Text] -> TierResult
+failWith :: Tier -> Milliseconds -> Text -> [Text] -> TierResult
 failWith t ms reason ds = TierResult t (Fail reason) ms ds
 
-skipWith :: Tier -> Int -> Text -> [Text] -> TierResult
+skipWith :: Tier -> Milliseconds -> Text -> [Text] -> TierResult
 skipWith t ms reason ds = TierResult t (Skip reason) ms ds
 
 -- | Summary counts over a run.
