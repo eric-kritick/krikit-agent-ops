@@ -1,0 +1,50 @@
+cabal-version:      3.0
+name:               krikit-agent-ops
+version:            0.1.0.0
+synopsis:           Ops tooling for krikit agent hosts
+description:
+    CLI binaries for maintaining, monitoring, and smoke-testing the krikit
+    agent stack. Each tool is a separate executable; shared logic lives in
+    the library.
+author:             Eric <krikitclaw@krikit.ai>
+maintainer:         krikitclaw@krikit.ai
+license:            BSD-3-Clause
+build-type:         Simple
+tested-with:        GHC ==9.14.1
+
+common warnings
+    ghc-options:
+        -Wall
+        -Wcompat
+        -Widentities
+        -Wincomplete-record-updates
+        -Wincomplete-uni-patterns
+        -Wmissing-export-lists
+        -Wmissing-home-modules
+        -Wpartial-fields
+        -Wredundant-constraints
+        -Wunused-packages
+
+common deps
+    build-depends: base ^>=4.22
+
+library
+    import:           warnings, deps
+    exposed-modules:  Krikit.Version
+    hs-source-dirs:   src
+    default-language: GHC2021
+
+executable krikit-smoke
+    import:           warnings, deps
+    main-is:          Main.hs
+    hs-source-dirs:   app/smoke
+    build-depends:    krikit-agent-ops
+    default-language: GHC2021
+
+test-suite krikit-agent-ops-test
+    import:           warnings, deps
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    krikit-agent-ops
+    default-language: GHC2021
