@@ -1,0 +1,491 @@
+{-# LANGUAGE DataKinds          #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE TypeApplications   #-}
+
+-- | Smoke-test orchestration and per-tier implementations.
+--
+-- Each tier is a small function with typed effect constraints (uses
+-- Proc, Probe, Log as needed). The orchestrator 'runSmoke' picks which
+-- tiers to run based on 'Opts' and collects the results.
+--
+-- This module stays effect-polymorphic where possible: only the
+-- tier runners depend on specific effects, and the orchestrator just
+-- composes them. The actual handler wiring happens in "Main".
+module Krikit.Agent.Ops.Smoke.Run
+    ( -- * Options + orchestration
+      Opts (..)
+    , defaultOpts
+    , selectTiers
+    , runSmoke
+
+      -- * Per-tier runners
+    , tierServices
+    , tierDocker
+    , tierOllama
+    , tierAudit
+    , tierAgent
+    , tierConfig
+    , tierErrLog
+    , tierTelegram
+    ) where
+
+import           Control.Concurrent             (threadDelay)
+import           Data.Aeson                     (Value (..))
+import qualified Data.Aeson                     as Aeson
+import qualified Data.Aeson.Key                 as AKey
+import qualified Data.Aeson.KeyMap              as AKM
+import qualified Data.ByteString.Lazy.Char8     as LBSC
+import           Data.Text                      (Text)
+import qualified Data.Text                      as T
+import qualified Data.Text.Encoding             as TE
+import qualified Data.Time.Clock.POSIX          as POSIX
+
+import           Effectful                      (Eff, IOE, liftIO, (:>))
+
+import           Krikit.Agent.Ops.Effect.Log
+    ( Log
+    , logFail
+    , logInfo
+    , logOk
+    )
+import           Krikit.Agent.Ops.Effect.Probe
+    ( Probe
+    , ProbeError (..)
+    , httpGet
+    , httpPost
+    )
+import           Krikit.Agent.Ops.Effect.Proc
+    ( Proc
+    , ProcError (..)
+    , ProcResult (..)
+    , runCmd
+    , runCmdAsUser
+    )
+import           Krikit.Agent.Ops.Smoke.Config
+    ( Paths (..)
+    , SmokeConfig (..)
+    , Thresholds (..)
+    , Timeouts (..)
+    , allServices
+    )
+import           Krikit.Agent.Ops.Smoke.Tier
+    ( Tier (..)
+    , TierResult (..)
+    , failWith
+    , pass
+    , skipWith
+    )
+
+-- | Runtime options from the command line.
+data Opts = Opts
+    { optFast     :: !Bool
+    , optVerbose  :: !Bool
+    , optTelegram :: !Bool
+    }
+    deriving stock (Eq, Show)
+
+defaultOpts :: Opts
+defaultOpts = Opts { optFast = False, optVerbose = False, optTelegram = False }
+
+-- | The ordered set of tiers to run for the given options.
+selectTiers :: Opts -> [Tier]
+selectTiers opts =
+    [ TierServices, TierDocker, TierOllama, TierAudit
+    , TierSentry, TierWorkhorse
+    ]
+    ++ (if optFast opts then [] else [TierThinker, TierBuilder])
+    ++ [ TierConfig, TierErrLog ]
+    ++ (if optTelegram opts then [TierTelegram] else [])
+
+-- | Run every selected tier and collect results in order.
+runSmoke
+    :: (Proc :> es, Probe :> es, Log :> es, IOE :> es)
+    => SmokeConfig
+    -> Opts
+    -> Eff es [TierResult]
+runSmoke cfg opts = mapM (runOne cfg) (selectTiers opts)
+
+runOne
+    :: (Proc :> es, Probe :> es, Log :> es, IOE :> es)
+    => SmokeConfig
+    -> Tier
+    -> Eff es TierResult
+runOne cfg = \case
+    TierServices  -> tierServices  cfg
+    TierDocker    -> tierDocker    cfg
+    TierOllama    -> tierOllama    cfg
+    TierAudit     -> tierAudit     cfg
+    TierSentry    -> tierAgent     TierSentry    "main"      (toSentry    (scTimeouts cfg))
+    TierWorkhorse -> tierAgent     TierWorkhorse "workhorse" (toWorkhorse (scTimeouts cfg))
+    TierThinker   -> tierAgent     TierThinker   "thinker"   (toThinker   (scTimeouts cfg))
+    TierBuilder   -> tierAgent     TierBuilder   "builder"   (toBuilder   (scTimeouts cfg))
+    TierConfig    -> tierConfig    cfg
+    TierErrLog    -> tierErrLog    cfg
+    TierTelegram  -> tierTelegram  cfg
+
+-- === Tier: launchd services =================================================
+
+tierServices
+    :: (Proc :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierServices cfg = do
+    logInfo "checking launchd services..."
+    xs <- mapM (serviceState (scTimeouts cfg)) allServices
+    let running    = [ lbl | (lbl, True)  <- xs ]
+        notRunning = [ lbl | (lbl, False) <- xs ]
+        n          = length running
+    mapM_ (logOk   . ("running: "     <>)) running
+    mapM_ (logFail . ("not running: " <>)) notRunning
+    if n >= thMinLaunchdServices (scThresholds cfg)
+        then pure (pass TierServices 0 [ "running=" <> T.pack (show n) ])
+        else pure
+            ( failWith TierServices 0
+                ( "only " <> T.pack (show n) <> " of "
+                    <> T.pack (show (length allServices)) <> " services running" )
+                [ "missing: " <> T.intercalate ", " notRunning ]
+            )
+
+serviceState
+    :: (Proc :> es)
+    => Timeouts -> Text -> Eff es (Text, Bool)
+serviceState to label = do
+    r <- runCmd "sudo" ["launchctl", "print", "system/" <> T.unpack label] (toShortCmd to)
+    pure (label, isRunning r)
+  where
+    isRunning = \case
+        Right ProcResult { prStdout = out } ->
+            "state = running" `T.isInfixOf` out
+        Left _ -> False
+
+-- === Tier: Docker / Colima ==================================================
+
+tierDocker
+    :: (Proc :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierDocker cfg = do
+    let sock = pColimaSocket (scPaths cfg)
+    logInfo ("probing docker via " <> T.pack sock <> "...")
+    r <- runCmdAsUser "agentops" "bash"
+            [ "-c"
+            , "DOCKER_HOST=unix://" <> sock
+                <> " docker info --format '{{.ServerVersion}}'"
+            ]
+            (toShortCmd (scTimeouts cfg))
+    pure $ case r of
+        Right ProcResult { prStdout = out }
+            | not (T.null (T.strip out)) ->
+                pass TierDocker 0 ["server=" <> T.strip out]
+        Right _ ->
+            failWith TierDocker 0 "docker info returned empty output" []
+        Left e ->
+            failWith TierDocker 0 (procErrorMsg e) []
+
+-- === Tier: Ollama ===========================================================
+
+tierOllama
+    :: (Probe :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierOllama cfg = do
+    logInfo "querying ollama /api/tags..."
+    r <- httpGet "http://127.0.0.1:11434/api/tags"
+    case r of
+        Left e  -> pure (failWith TierOllama 0 (probeErrorMsg e) [])
+        Right b -> pure (parseOllama cfg b)
+
+parseOllama :: SmokeConfig -> Text -> TierResult
+parseOllama cfg body =
+    case Aeson.decode @Value (LBSC.pack (T.unpack body)) of
+        Nothing -> failWith TierOllama 0 "unparseable JSON from /api/tags" []
+        Just v  ->
+            let n    = ollamaModelCount v
+                need = thMinOllamaModels (scThresholds cfg)
+            in  if n >= need
+                    then pass TierOllama 0
+                            ["models=" <> T.pack (show n)]
+                    else failWith TierOllama 0
+                            ( "only " <> T.pack (show n)
+                                <> " models present, want >= "
+                                <> T.pack (show need) )
+                            []
+
+ollamaModelCount :: Value -> Int
+ollamaModelCount = \case
+    Object o -> case AKM.lookup "models" o of
+        Just (Array xs) -> length xs
+        _               -> 0
+    _        -> 0
+
+-- === Tier: openclaw security audit ==========================================
+
+tierAudit
+    :: (Proc :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierAudit _ = do
+    logInfo "running openclaw security audit..."
+    r <- runCmdAsUser "agentops" "openclaw" ["security", "audit"] 30
+    case r of
+        Left e  -> pure (failWith TierAudit 0 (procErrorMsg e) [])
+        Right ProcResult { prStdout = out } -> pure (parseAudit out)
+
+parseAudit :: Text -> TierResult
+parseAudit out =
+    case filter ("critical" `T.isInfixOf`) (T.lines out) of
+        []      -> failWith TierAudit 0 "no summary line found in audit output" []
+        (s : _) ->
+            let crit = countBefore "critical" s
+                warn = countBefore "warn" s
+            in  if crit == Just 0 && warn == Just 0
+                    then pass TierAudit 0 [T.strip s]
+                    else failWith TierAudit 0
+                            ( "audit: critical="
+                                <> maybe "?" (T.pack . show) crit
+                                <> " warn="
+                                <> maybe "?" (T.pack . show) warn )
+                            [T.strip s]
+
+-- | Find the integer token immediately before the given keyword. Useful for
+-- "N critical · M warn · 2 info"-style summary lines.
+countBefore :: Text -> Text -> Maybe Int
+countBefore keyword line =
+    case break (== keyword) (T.words line) of
+        (prefix, _matched : _) ->
+            case safeLast prefix of
+                Just n -> readIntMaybe n
+                Nothing -> Nothing
+        _ -> Nothing
+  where
+    safeLast xs = case xs of
+        [] -> Nothing
+        _  -> Just (last xs)
+
+readIntMaybe :: Text -> Maybe Int
+readIntMaybe t = case reads (T.unpack t) of
+    [(n, "")] -> Just n
+    _         -> Nothing
+
+-- === Tier: agent liveness (Sentry/Workhorse/Thinker/Builder) ================
+
+smokePrompt :: String
+smokePrompt =
+    "[smoke-test ping] Reply with only the single word PONG and nothing else."
+
+tierAgent
+    :: (Proc :> es, Log :> es)
+    => Tier -> Text -> Int -> Eff es TierResult
+tierAgent tier agentLbl to = do
+    logInfo
+        ( "probing agent " <> agentLbl
+            <> " (timeout " <> T.pack (show to) <> "s)..."
+        )
+    r <- runCmdAsUser "agentops" "openclaw"
+            [ "agent", "--agent", T.unpack agentLbl
+            , "-m", smokePrompt
+            ]
+            to
+    pure $ case r of
+        Left ProcTimeout ->
+            failWith tier 0 ("no response within " <> T.pack (show to) <> "s") []
+        Left e ->
+            failWith tier 0 (procErrorMsg e) []
+        Right ProcResult { prStdout = out, prElapsedMs = ms }
+            | T.length (T.strip out) < 5 ->
+                failWith tier ms "empty or trivially short response" [out]
+            | otherwise ->
+                pass tier ms ["bytes=" <> T.pack (show (T.length out))]
+
+-- === Tier: config assertions ================================================
+
+tierConfig
+    :: (Proc :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierConfig cfg = do
+    let path = pOpenclawConfig (scPaths cfg)
+    logInfo ("reading " <> T.pack path <> "...")
+    r <- runCmd "sudo" ["cat", path] (toShortCmd (scTimeouts cfg))
+    case r of
+        Left e  -> pure (failWith TierConfig 0 (procErrorMsg e) [])
+        Right ProcResult { prStdout = out } -> pure (parseConfig out)
+
+parseConfig :: Text -> TierResult
+parseConfig body =
+    case Aeson.decode @Value (LBSC.pack (T.unpack body)) of
+        Nothing -> failWith TierConfig 0 "config is not valid JSON" []
+        Just v  ->
+            let deny      = readPath v ["tools", "deny"]
+                sandbox   = readPath v ["agents", "defaults", "sandbox", "mode"]
+                denyOk    =
+                    case deny of
+                        Array xs -> elem (String "group:web") xs
+                        _        -> False
+                sandboxOk = sandbox == String "all"
+            in case (denyOk, sandboxOk) of
+                (True, True)   ->
+                    pass TierConfig 0
+                        [ "tools.deny contains group:web"
+                        , "sandbox.mode=all"
+                        ]
+                (False, True)  ->
+                    failWith TierConfig 0 "tools.deny missing group:web" []
+                (True, False)  ->
+                    failWith TierConfig 0
+                        ( "sandbox.mode != all (got " <> showValue sandbox <> ")" )
+                        []
+                (False, False) ->
+                    failWith TierConfig 0
+                        "tools.deny + sandbox.mode both wrong" []
+
+readPath :: Value -> [Text] -> Value
+readPath = foldl step
+  where
+    step (Object o) k = case AKM.lookup (AKey.fromText k) o of
+        Just v  -> v
+        Nothing -> Null
+    step _ _ = Null
+
+showValue :: Value -> Text
+showValue = TE.decodeUtf8 . LBSC.toStrict . Aeson.encode
+
+-- === Tier: sandbox err-log scan =============================================
+
+tierErrLog
+    :: (Proc :> es, Log :> es)
+    => SmokeConfig -> Eff es TierResult
+tierErrLog cfg = do
+    let path = pOpenclawErrLog (scPaths cfg)
+        n    = thErrLogScanLineCount (scThresholds cfg)
+    logInfo
+        ( "scanning last " <> T.pack (show n)
+            <> " lines of " <> T.pack path
+        )
+    r <- runCmd "sudo" ["tail", "-" <> show n, path] (toShortCmd (scTimeouts cfg))
+    case r of
+        Left (ProcLaunchErr _) ->
+            pure (skipWith TierErrLog 0 "err log not readable" [])
+        Left e ->
+            pure (failWith TierErrLog 0 (procErrorMsg e) [])
+        Right ProcResult { prStdout = out } ->
+            pure (analyzeErrLog out)
+
+analyzeErrLog :: Text -> TierResult
+analyzeErrLog out =
+    let hits = [ l | l <- T.lines out
+                   , any (`T.isInfixOf` l) sandboxErrors
+               ]
+    in  if null hits
+            then pass TierErrLog 0 ["no sandbox errors in recent err log"]
+            else failWith TierErrLog 0
+                    ( T.pack (show (length hits))
+                        <> " sandbox error lines in recent log" )
+                    hits
+  where
+    sandboxErrors =
+        [ "Failed to inspect sandbox image"
+        , "Cannot connect to the Docker daemon"
+        , "sandbox image not found"
+        ]
+
+-- === Tier: Telegram round-trip ==============================================
+
+tierTelegram
+    :: (Proc :> es, Probe :> es, Log :> es, IOE :> es)
+    => SmokeConfig -> Eff es TierResult
+tierTelegram cfg = do
+    let paths = scPaths cfg
+    logInfo ("reading " <> T.pack (pChannelsEnv paths))
+    envRes <- runCmd "sudo" ["cat", pChannelsEnv paths] (toShortCmd (scTimeouts cfg))
+    case envRes of
+        Left _ ->
+            pure (skipWith TierTelegram 0 "channels.env not readable" [])
+        Right ProcResult { prStdout = envBody } ->
+            case ( lookupEnv "TELEGRAM_BOT_TOKEN"     envBody
+                 , lookupEnv "TELEGRAM_ALERT_CHAT_ID" envBody
+                 ) of
+                (Just token, Just chatId) ->
+                    runTelegramProbe cfg token chatId
+                _ ->
+                    pure (skipWith TierTelegram 0 "telegram creds missing" [])
+
+runTelegramProbe
+    :: (Proc :> es, Probe :> es, Log :> es, IOE :> es)
+    => SmokeConfig -> Text -> Text -> Eff es TierResult
+runTelegramProbe cfg token chatId = do
+    nonce <- liftIO freshNonce
+    let body = "[smoke] nonce=" <> nonce
+                 <> " (krikit-smoke round-trip probe; safe to ignore)"
+        url  = "https://api.telegram.org/bot" <> T.unpack token <> "/sendMessage"
+    logInfo ("posting to telegram with nonce=" <> nonce)
+    sendRes <- httpPost url [("chat_id", chatId), ("text", body)]
+    case sendRes of
+        Left e ->
+            pure ( failWith TierTelegram 0
+                     ("sendMessage: " <> probeErrorMsg e) [] )
+        Right _ ->
+            pollForNonce cfg nonce
+
+-- | Poll the openclaw log dir for the nonce. Sleeps 1s between attempts,
+-- gives up after 'toTelegramWait' seconds.
+pollForNonce
+    :: (Proc :> es, IOE :> es)
+    => SmokeConfig -> Text -> Eff es TierResult
+pollForNonce cfg nonce =
+    loop 0
+  where
+    maxWait = toTelegramWait (scTimeouts cfg)
+
+    loop i
+        | i >= maxWait =
+            pure ( failWith TierTelegram 0
+                     ( "nonce not observed in openclaw log after "
+                         <> T.pack (show maxWait) <> "s" )
+                     [] )
+        | otherwise = do
+            liftIO (threadDelay 1_000_000)
+            r <- runCmd "sudo" ["sh", "-c", grepCmd] 5
+            case r of
+                Right ProcResult { prStdout = out }
+                    | nonce `T.isInfixOf` out ->
+                        pure ( pass TierTelegram (i * 1000)
+                                 [ "nonce observed after "
+                                     <> T.pack (show i) <> "s" ] )
+                _ -> loop (i + 1)
+
+    grepCmd =
+        "grep -l '" <> T.unpack nonce
+            <> "' /tmp/openclaw/openclaw-*.log || true"
+
+-- === Helpers ================================================================
+
+freshNonce :: IO Text
+freshNonce = do
+    secs <- POSIX.getPOSIXTime
+    pure ("smoke-" <> T.pack (show (floor secs :: Integer)))
+
+procErrorMsg :: ProcError -> Text
+procErrorMsg = \case
+    ProcTimeout       -> "timeout"
+    ProcNonZero n     -> "non-zero exit " <> T.pack (show n)
+    ProcLaunchErr msg -> "launch error: " <> msg
+
+probeErrorMsg :: ProbeError -> Text
+probeErrorMsg = \case
+    ProbeNetwork msg -> "network error: " <> msg
+    ProbeStatus  n   -> "http status " <> T.pack (show n)
+
+-- | Naive KEY=VALUE extractor from a channels.env-style string.
+-- First match wins; whitespace around KEY and around VALUE is stripped.
+lookupEnv :: Text -> Text -> Maybe Text
+lookupEnv key body =
+    headMay
+        [ T.strip (T.drop (T.length prefix) stripped)
+        | rawLine <- T.lines body
+        , let stripped = T.strip rawLine
+        , let prefix   = key <> "="
+        , prefix `T.isPrefixOf` stripped
+        ]
+  where
+    headMay xs = case xs of
+        []    -> Nothing
+        (x:_) -> Just x

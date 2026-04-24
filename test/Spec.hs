@@ -1,13 +1,10 @@
 module Main (main) where
 
-import qualified Krikit.Agent.Ops.Version as V
-import           System.Exit              (exitFailure)
+import qualified Krikit.Agent.Ops.Smoke.RunSpec
+import qualified Krikit.Agent.Ops.Smoke.TierSpec
+import           Test.Hspec                    (hspec)
 
 main :: IO ()
-main = do
-    putStrLn "krikit-agent-ops test suite"
-    if V.versionString == "0.1.0.0"
-        then putStrLn "  OK: version matches"
-        else do
-            putStrLn "  FAIL: version mismatch"
-            exitFailure
+main = hspec $ do
+    Krikit.Agent.Ops.Smoke.TierSpec.spec
+    Krikit.Agent.Ops.Smoke.RunSpec.spec

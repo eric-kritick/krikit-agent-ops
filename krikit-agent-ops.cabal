@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               krikit-agent-ops
-version:            0.1.0.0
+version:            0.2.0.0
 synopsis:           Ops tooling for krikit agent hosts
 description:
     CLI binaries for maintaining, monitoring, and smoke-testing the krikit
@@ -26,25 +26,60 @@ common warnings
         -Wunused-packages
 
 common deps
-    build-depends: base ^>=4.22
+    build-depends:
+        , base                ^>=4.22
+        , text                ^>=2.1
+        , bytestring          ^>=0.12
+        , containers          >=0.6  && <0.9
+        , aeson               >=2.2  && <2.3
+        , effectful           ^>=2.6
+        , effectful-th        ^>=1.0
+        , http-client         ^>=0.7
+        , http-client-tls     ^>=0.3
+        , http-types          ^>=0.12
+        , time                >=1.12 && <1.15
+        , typed-process       ^>=0.2
 
 library
     import:           warnings, deps
-    exposed-modules:  Krikit.Agent.Ops.Version
+    exposed-modules:
+        Krikit.Agent.Ops.Version
+        Krikit.Agent.Ops.Effect.Log
+        Krikit.Agent.Ops.Effect.Probe
+        Krikit.Agent.Ops.Effect.Proc
+        Krikit.Agent.Ops.Smoke.Config
+        Krikit.Agent.Ops.Smoke.Report
+        Krikit.Agent.Ops.Smoke.Run
+        Krikit.Agent.Ops.Smoke.Tier
     hs-source-dirs:   src
     default-language: GHC2021
 
 executable krikit-smoke
-    import:           warnings, deps
+    import:           warnings
     main-is:          Main.hs
     hs-source-dirs:   app/smoke
-    build-depends:    krikit-agent-ops
+    build-depends:
+        , base                 ^>=4.22
+        , bytestring           ^>=0.12
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+        , time                 >=1.12 && <1.15
     default-language: GHC2021
 
 test-suite krikit-agent-ops-test
-    import:           warnings, deps
+    import:           warnings
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Spec.hs
-    build-depends:    krikit-agent-ops
+    other-modules:
+        Krikit.Agent.Ops.Smoke.RunSpec
+        Krikit.Agent.Ops.Smoke.TierSpec
+    build-depends:
+        , base              ^>=4.22
+        , containers        >=0.6  && <0.9
+        , effectful         ^>=2.6
+        , hspec             ^>=2.11
+        , krikit-agent-ops
     default-language: GHC2021
