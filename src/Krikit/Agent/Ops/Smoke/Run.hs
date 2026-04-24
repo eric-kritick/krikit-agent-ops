@@ -479,12 +479,18 @@ analyzeErrLog now window out =
 
 -- | Parse the ISO-8601 timestamp at the start of an err-log line, if any.
 -- OpenClaw prefixes every line with e.g. @2026-04-22T11:08:42.726-04:00@.
--- Falls back to 'Nothing' for multi-line-continuation lines or anything
--- else that doesn't open with a parseable timestamp.
+--
+-- Parses as 'Time.ZonedTime' and normalizes to UTC. Going via ZonedTime
+-- is deliberate: 'iso8601ParseM' directly to 'UTCTime' accepts only the
+-- @Z@ (Zulu) offset form, and our logs carry the @+HH:MM@ / @-HH:MM@
+-- extended form. ZonedTime handles both uniformly.
+--
+-- Returns 'Nothing' for multi-line continuation lines or anything else
+-- that doesn't open with a parseable timestamp.
 parseLineTimestamp :: Text -> Maybe Time.UTCTime
 parseLineTimestamp line =
     let prefix = T.unpack (T.takeWhile (/= ' ') line)
-    in  ISO8601.iso8601ParseM prefix
+    in  fmap Time.zonedTimeToUTC (ISO8601.iso8601ParseM prefix)
 
 -- === Tier: Telegram round-trip ==============================================
 
