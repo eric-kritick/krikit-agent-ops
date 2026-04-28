@@ -61,6 +61,7 @@ library
         Krikit.Agent.Ops.UpdateStatus.Refresh
         Krikit.Agent.Ops.UpdateStatus.Report
         Krikit.Agent.Ops.UpdateStatus.Run
+        Krikit.Agent.Ops.Update.Run
         Krikit.Agent.Ops.UpdateStatus.Tool
         Krikit.Agent.Ops.UpdateStatus.Version
         Krikit.Agent.Ops.Versions.Run
@@ -136,6 +137,18 @@ executable krikit-health
         , base                 ^>=4.22
         , effectful            ^>=2.6
         , krikit-agent-ops
+        , text                 ^>=2.1
+    default-language: GHC2021
+
+executable krikit-update
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/update
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
         , text                 ^>=2.1
     default-language: GHC2021
 
