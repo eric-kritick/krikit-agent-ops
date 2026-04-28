@@ -42,19 +42,30 @@ import           Krikit.Agent.Ops.UpdateStatus.MacOS
 -- the caller can render a one-line summary without re-reading the
 -- file.
 data RefreshOutcome
-    = RefreshOk         !MacOSStatus
+    = RefreshOk               !MacOSStatus
     -- ^ @softwareupdate -l@ ran and the cache was written.
-    | RefreshNeedsRoot
-    -- ^ Cache write failed with EACCES; user needs to re-run with sudo.
     | RefreshSubprocessFailed !Text
     -- ^ @softwareupdate -l@ itself errored; payload is the reason.
     | RefreshWriteFailed      !Text
     -- ^ Subprocess succeeded but writing the cache file errored.
+    -- The most likely cause is stale ownership on the cache file
+    -- (e.g. created by an earlier sudo-run version of the script);
+    -- one-time fix:
+    --
+    -- @
+    -- sudo chown agentops:admin /var/lib/krikit/macos-updates.cache
+    -- @
     deriving stock (Eq, Show)
 
--- | Run @softwareupdate -l@, write the output to the cache file,
--- best-effort chown to @agentops:admin@, and parse the result so
--- the caller can render a summary.
+-- | Run @softwareupdate -l@ and write the output to the cache.
+--
+-- Doesn't need root: @softwareupdate -l@ is a read-only network call
+-- anyone can make, and @\/var\/lib\/krikit\/@ is set up by PB 10
+-- Phase 2 to be owned by @agentops:admin@ so agentops (which is the
+-- user @monitor.py@ runs as) can write the cache directly.
+--
+-- The previous bash krikit-macos-updates used sudo for both steps;
+-- the sudo was defensive, not required.
 refreshCache
     :: (Proc :> es, IOE :> es)
     => Eff es RefreshOutcome
@@ -77,29 +88,12 @@ refreshCache = do
                 (TIO.writeFile defaultMacOSCachePath body)
 
             case writeResult of
-                Left e
-                    | isPermissionDeniedMessage (T.pack (show e))
-                        -> pure RefreshNeedsRoot
-                    | otherwise
-                        -> pure (RefreshWriteFailed (T.pack (show e)))
+                Left e ->
+                    pure (RefreshWriteFailed (T.pack (show e)))
 
-                Right () -> do
-                    -- Best-effort chown so monitor.py (running as
-                    -- agentops) keeps writing to the same file later
-                    -- if it ever needs to. Failure is fine — we
-                    -- already have the content in place.
-                    _ <- runCmd "chown"
-                            ["agentops:admin", defaultMacOSCachePath]
-                            (Seconds 5)
-
-                    -- Classify so the caller can summarize. Cache age
-                    -- is "now" since we just wrote it.
+                Right () ->
+                    -- Cache age is "now" since we just wrote it.
                     pure (RefreshOk (parseMacOSCache body 0))
-
-isPermissionDeniedMessage :: Text -> Bool
-isPermissionDeniedMessage msg =
-    "permission denied" `T.isInfixOf` T.toLower msg
-        || "operation not permitted" `T.isInfixOf` T.toLower msg
 
 procErrorMsg :: ProcError -> Text
 procErrorMsg = \case

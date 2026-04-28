@@ -8,8 +8,9 @@
 --
 -- * Default: read the cache + query npm; print a report.
 -- * @--refresh-cache@: run @softwareupdate -l@, write the cache,
---   print a brief summary. Requires sudo (cache lives under
---   @/var/lib/krikit/@).
+--   print a brief summary. Runs as the invoking user; works
+--   without sudo because @\/var\/lib\/krikit\/@ is owned by
+--   @agentops:admin@ per PB 10 Phase 2.
 module Main (main) where
 
 import qualified Data.Text.IO                           as TIO
@@ -48,7 +49,8 @@ optsParser :: Parser Opts
 optsParser =
     Opts <$> switch
         ( long "refresh-cache"
-        <> help "Run softwareupdate -l and refresh /var/lib/krikit/macos-updates.cache. Requires sudo."
+        <> help "Run softwareupdate -l and refresh /var/lib/krikit/macos-updates.cache. \
+                \No sudo required; runs as the invoking user."
         )
 
 main :: IO ()
@@ -78,15 +80,13 @@ runRefresh = do
             TIO.putStrLn "Cache refreshed."
             TIO.putStrLn (renderMacOSStatus status)
             exitSuccess
-        RefreshNeedsRoot -> do
-            TIO.putStrLn
-                "FAILED: cache write denied. Re-run with sudo."
-            TIO.putStrLn
-                "  e.g.  sudo krikit-update-status --refresh-cache"
-            exitFailure
         RefreshSubprocessFailed reason -> do
             TIO.putStrLn ("FAILED: " <> reason)
             exitFailure
         RefreshWriteFailed reason -> do
             TIO.putStrLn ("FAILED: cache write: " <> reason)
+            TIO.putStrLn
+                "Most likely fix: stale ownership on the cache file."
+            TIO.putStrLn
+                "  sudo chown agentops:admin /var/lib/krikit/macos-updates.cache"
             exitFailure
