@@ -50,16 +50,20 @@ library
         Krikit.Agent.Ops.Effect.Log
         Krikit.Agent.Ops.Effect.Probe
         Krikit.Agent.Ops.Effect.Proc
+        Krikit.Agent.Ops.Health.Run
         Krikit.Agent.Ops.Restart.Run
         Krikit.Agent.Ops.Smoke.Config
         Krikit.Agent.Ops.Smoke.Report
         Krikit.Agent.Ops.Smoke.Run
         Krikit.Agent.Ops.Smoke.Tier
+        Krikit.Agent.Ops.Summary.Run
         Krikit.Agent.Ops.UpdateStatus.MacOS
+        Krikit.Agent.Ops.UpdateStatus.Refresh
         Krikit.Agent.Ops.UpdateStatus.Report
         Krikit.Agent.Ops.UpdateStatus.Run
         Krikit.Agent.Ops.UpdateStatus.Tool
         Krikit.Agent.Ops.UpdateStatus.Version
+        Krikit.Agent.Ops.Versions.Run
     hs-source-dirs:   src
     default-language: GHC2021
 
@@ -85,6 +89,7 @@ executable krikit-update-status
         , base                 ^>=4.22
         , effectful            ^>=2.6
         , krikit-agent-ops
+        , optparse-applicative ^>=0.19
         , text                 ^>=2.1
     default-language: GHC2021
 
@@ -97,6 +102,40 @@ executable krikit-restart
         , effectful            ^>=2.6
         , krikit-agent-ops
         , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+    default-language: GHC2021
+
+executable krikit-versions
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/versions
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , text                 ^>=2.1
+    default-language: GHC2021
+
+executable krikit-summary
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/summary
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+    default-language: GHC2021
+
+executable krikit-health
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/health
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
         , text                 ^>=2.1
     default-language: GHC2021
 
