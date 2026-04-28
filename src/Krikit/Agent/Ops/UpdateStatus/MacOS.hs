@@ -10,8 +10,10 @@
 -- formatter doesn't have to redo the parsing.
 module Krikit.Agent.Ops.UpdateStatus.MacOS
     ( MacOSStatus (..)
+    , MacOSUpdate (..)
     , readMacOSStatus
     , parseMacOSCache
+    , extractUpdates
 
       -- * Defaults
     , defaultMacOSCachePath
@@ -25,12 +27,22 @@ import qualified Data.Text.IO       as TIO
 import qualified Data.Time          as Time
 import           System.Directory   (doesFileExist, getModificationTime)
 
+-- | A single pending update, parsed from one entry in the cache.
+data MacOSUpdate = MacOSUpdate
+    { muLabel :: !Text
+    -- ^ The exact label, suitable for @softwareupdate -i \<label\>@.
+    , muTitle :: !Text
+    -- ^ Human-readable title, e.g. @"macOS Sequoia 15.5"@. May be
+    -- empty if the cache entry didn't include a Title line.
+    }
+    deriving stock (Eq, Show)
+
 -- | Outcome of inspecting the macOS update cache.
 data MacOSStatus
     = MacOSUpToDate          !Int
     -- ^ No pending updates. Carries the cache age in days.
-    | MacOSUpdatesAvailable  !Int !Int
-    -- ^ N updates pending. Carries (count, age in days).
+    | MacOSUpdatesAvailable  ![MacOSUpdate] !Int
+    -- ^ Pending updates with their labels + titles, plus cache age.
     | MacOSCacheStale        !MacOSStatus
     -- ^ Wraps another status when the cache is older than the
     -- "stale" threshold; lets the formatter both show the result
@@ -80,7 +92,7 @@ parseMacOSCache body ageDays
     | "No new software available" `T.isInfixOf` body =
         MacOSUpToDate ageDays
     | hasPendingMarker body =
-        MacOSUpdatesAvailable (countPendingLines body) ageDays
+        MacOSUpdatesAvailable (extractUpdates body) ageDays
     | otherwise =
         MacOSCacheUnparseable
             "neither 'No new software available' nor '* '-prefixed lines found"
@@ -95,8 +107,49 @@ applyStaleness ageDays s
 hasPendingMarker :: Text -> Bool
 hasPendingMarker = any startsWithStar . T.lines
 
-countPendingLines :: Text -> Int
-countPendingLines = length . filter startsWithStar . T.lines
-
 startsWithStar :: Text -> Bool
 startsWithStar = ("* " `T.isPrefixOf`)
+
+-- | Walk the cache lines pulling out (label, title) pairs.
+--
+-- @softwareupdate -l@ emits each pending update as two lines:
+--
+-- @
+-- * Label: macOS Sequoia 15.5-23F79
+--   Title: macOS Sequoia 15.5, Version: 15.5, Size: 14.2 GiB, Recommended: YES, Action: restart,
+-- @
+--
+-- We pair them up: every @* Label:@ line starts a new entry, and the
+-- next line containing a @Title:@ field (before the next label, if
+-- any) provides the title. Title is taken up to the first comma so
+-- the report doesn't get cluttered with version/size suffixes.
+--
+-- An entry without a recognized Title line still counts; we emit it
+-- with an empty 'muTitle' so the operator at least sees the label.
+extractUpdates :: Text -> [MacOSUpdate]
+extractUpdates = collect Nothing . T.lines
+  where
+    collect :: Maybe Text -> [Text] -> [MacOSUpdate]
+    collect mLabel [] =
+        case mLabel of
+            Just l  -> [MacOSUpdate l ""]
+            Nothing -> []
+    collect mLabel (line : rest) =
+        case T.stripPrefix "* Label: " (T.stripStart line) of
+            Just newLabel ->
+                let buffered = case mLabel of
+                                 Just l  -> [MacOSUpdate l ""]
+                                 Nothing -> []
+                in  buffered ++ collect (Just (T.strip newLabel)) rest
+            Nothing ->
+                case (mLabel, extractTitle line) of
+                    (Just l, Just t) ->
+                        MacOSUpdate l t : collect Nothing rest
+                    _ ->
+                        collect mLabel rest
+
+extractTitle :: Text -> Maybe Text
+extractTitle line =
+    case T.stripPrefix "Title:" (T.stripStart line) of
+        Just rest -> Just (T.takeWhile (/= ',') (T.strip rest))
+        Nothing   -> Nothing

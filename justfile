@@ -30,6 +30,17 @@ install:
                   --install-method copy \
                   --overwrite-policy=always
 
+# Same as `install`, plus mirror krikit-update-status to a system path
+# readable by all users. Needed on the mini because monitor.py runs as
+# agentops and invokes krikit-update-status from the daily digest --
+# /Users/opsadmin/.local/bin/ may not be traversable by agentops on
+# hardened hosts.
+install-system: install
+    sudo install -d /usr/local/bin/krikit
+    sudo install -m 755 \
+        "{{env_var('HOME')}}/.local/bin/krikit-update-status" \
+        /usr/local/bin/krikit/krikit-update-status
+
 # Delete all build artifacts.
 clean:
     cabal clean
@@ -53,6 +64,13 @@ update:
 
 # Same as `update` but skip the `git pull` (useful after local edits).
 rebuild: build install
+
+# Same as `update` but also mirrors update-status to /usr/local/bin/krikit/.
+# Use this on the mini after pulling a change to the update-status binary.
+update-system: update
+    sudo install -m 755 \
+        "{{env_var('HOME')}}/.local/bin/krikit-update-status" \
+        /usr/local/bin/krikit/krikit-update-status
 
 # -----------------------------------------------------------------------------
 # Run / inspect

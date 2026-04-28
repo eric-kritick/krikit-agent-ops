@@ -18,6 +18,7 @@ import qualified Data.Text                              as T
 
 import           Krikit.Agent.Ops.UpdateStatus.MacOS
     ( MacOSStatus (..)
+    , MacOSUpdate (..)
     , defaultStaleThresholdDays
     )
 import           Krikit.Agent.Ops.UpdateStatus.Run
@@ -92,22 +93,58 @@ formatLine m name body =
 nameWidth :: Int
 nameWidth = 12
 
--- | One line for macOS, using the same marker+name layout as tools.
+-- | Render the macOS line, plus per-update sub-lines if any are pending.
+--
+-- For 0 pending: one-line summary.
+-- For >=1 pending: header line + indented bullets per update, e.g.
+--
+-- @
+-- ! macOS       1 pending (cache 5d old):
+--     - macOS Sequoia 15.5  [macOS Sequoia 15.5-23F79]
+-- @
+--
+-- Title is the human-friendly name; trailing bracketed text is the
+-- exact label suitable for @softwareupdate -i \<label\>@.
 renderMacOSStatus :: MacOSStatus -> Text
 renderMacOSStatus = \case
     MacOSUpToDate days ->
-        formatLine ' ' "macOS" ("no updates pending (cache " <> ageText days <> " old)")
-    MacOSUpdatesAvailable count days ->
-        formatLine '!' "macOS"
-            (T.pack (show count) <> " pending (cache " <> ageText days <> " old)")
+        formatLine ' ' "macOS"
+            ("no updates pending (cache " <> ageText days <> " old)")
+
+    MacOSUpdatesAvailable updates days ->
+        let header = formatLine '!' "macOS"
+                ( T.pack (show (length updates))
+                    <> " pending (cache " <> ageText days <> " old):"
+                )
+            bullets = map renderUpdate updates
+        in  T.intercalate "\n" (header : bullets)
+
     MacOSCacheStale inner ->
         renderMacOSStatus inner
             <> "\n  ! cache stale (>" <> T.pack (show defaultStaleThresholdDays)
             <> "d); re-run krikit-macos-updates"
+
     MacOSCacheMissing ->
         formatLine ' ' "macOS" "(cache not built; run krikit-macos-updates)"
+
     MacOSCacheUnparseable reason ->
         formatLine '?' "macOS" ("cache unparseable: " <> reason)
+
+renderUpdate :: MacOSUpdate -> Text
+renderUpdate u =
+    "    - " <> visibleTitle <> labelSuffix
+  where
+    visibleTitle =
+        if T.null (muTitle u)
+            then muLabel u
+            else muTitle u
+
+    -- Show the label too if it differs from the title (lets the
+    -- operator copy-paste straight to `softwareupdate -i <label>`).
+    labelSuffix
+        | T.null (muTitle u)         = ""
+        | muTitle u == muLabel u     = ""
+        | otherwise                  = "  [" <> muLabel u <> "]"
 
 ageText :: Int -> Text
 ageText days = T.pack (show days) <> "d"
