@@ -74,19 +74,24 @@ import           Krikit.Agent.Ops.Smoke.Config
     , Timeouts (..)
     , timeoutFor
     )
-import           Krikit.Agent.Ops.Smoke.Tier
+import           Krikit.Agent.Ops.Agent
     ( Agent (..)
-    , Service
-    , ServiceExpectation (..)
-    , Tier (..)
-    , TierResult (..)
     , agentDisplayName
     , agentOpenclawName
+    )
+import           Krikit.Agent.Ops.Service
+    ( Service
+    , ServiceExpectation (..)
+    , allServices
+    , serviceExpectation
+    , serviceLaunchctlLabel
+    )
+import           Krikit.Agent.Ops.Smoke.Tier
+    ( Tier (..)
+    , TierResult (..)
     , agentToTier
     , failWith
     , pass
-    , serviceExpectation
-    , serviceLaunchctlLabel
     , skipWith
     )
 import           Krikit.Agent.Ops.Units
@@ -173,7 +178,7 @@ tierServices cfg = do
                 | (s, obs) <- failures ]
             )
   where
-    services = [minBound .. maxBound :: Service]
+    services = allServices
 
 -- | A service passes if its observed state satisfies its expectation.
 meetsExpectation :: Service -> ServiceObservation -> Bool

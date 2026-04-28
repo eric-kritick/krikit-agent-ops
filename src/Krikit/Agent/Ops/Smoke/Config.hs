@@ -22,8 +22,8 @@ module Krikit.Agent.Ops.Smoke.Config
     , defaultThresholds
     ) where
 
-import           Krikit.Agent.Ops.Smoke.Tier (Agent (..))
-import           Krikit.Agent.Ops.Units      (Seconds (..))
+import           Krikit.Agent.Ops.Agent (Agent (..))
+import           Krikit.Agent.Ops.Units (Seconds (..))
 
 -- | Top-level config bundle. Consumed by 'Krikit.Agent.Ops.Smoke.Run'.
 data SmokeConfig = SmokeConfig

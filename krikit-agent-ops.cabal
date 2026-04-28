@@ -44,10 +44,13 @@ common deps
 library
     import:           warnings, deps
     exposed-modules:
+        Krikit.Agent.Ops.Agent
+        Krikit.Agent.Ops.Service
         Krikit.Agent.Ops.Units
         Krikit.Agent.Ops.Effect.Log
         Krikit.Agent.Ops.Effect.Probe
         Krikit.Agent.Ops.Effect.Proc
+        Krikit.Agent.Ops.Restart.Run
         Krikit.Agent.Ops.Smoke.Config
         Krikit.Agent.Ops.Smoke.Report
         Krikit.Agent.Ops.Smoke.Run
@@ -82,6 +85,18 @@ executable krikit-update-status
         , base                 ^>=4.22
         , effectful            ^>=2.6
         , krikit-agent-ops
+        , text                 ^>=2.1
+    default-language: GHC2021
+
+executable krikit-restart
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/restart
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
         , text                 ^>=2.1
     default-language: GHC2021
 
