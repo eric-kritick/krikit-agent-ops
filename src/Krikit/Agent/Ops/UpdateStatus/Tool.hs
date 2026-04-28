@@ -63,8 +63,15 @@ data UpstreamSource
     deriving stock (Eq, Show)
 
 -- | Exhaustive on 'Tool'. New tool? You'll be forced to classify it.
+--
+-- Claude Code is also published to npm as @\@anthropic-ai\/claude-code@,
+-- so we can do an exact version check the same way we do for codex
+-- and openclaw -- even though Claude *also* has a built-in
+-- auto-updater. The registry comparison just tells the operator
+-- "you're N versions behind"; the auto-updater is what actually
+-- catches you up at the next 'claude' invocation.
 toolUpstream :: Tool -> UpstreamSource
 toolUpstream = \case
     ToolCodex    -> NpmRegistry "@openai/codex"
     ToolOpenclaw -> NpmRegistry "openclaw"
-    ToolClaude   -> AutoUpdates
+    ToolClaude   -> NpmRegistry "@anthropic-ai/claude-code"

@@ -74,15 +74,25 @@ spec = do
                 other     -> expectationFailure
                                 ("expected Unknown, got " <> show other)
 
-    describe "checkTool ToolClaude (auto-updates)" $ do
+    describe "checkTool ToolClaude (npm-backed @anthropic-ai/claude-code)" $ do
 
-        it "reports NoRemoteCheck regardless of npm" $ do
+        it "passes when installed matches npm's latest" $ do
             let mocks = Map.fromList
                     [ ("claude",
-                       mockResponse "claude version 2.1.118 (Claude Code)\n"
-                                    "" (Milliseconds 30))
-                    -- npm absent on purpose; should never be invoked
+                       mockResponse "2.1.118\n" "" (Milliseconds 30))
+                    , ("npm",
+                       mockResponse "2.1.118\n" "" (Milliseconds 200))
                     ]
                 ts = runPureEff $ runProcMock mocks (checkTool ToolClaude)
-            tsAvailability ts `shouldBe` NoRemoteCheck
+            tsAvailability ts `shouldBe` UpToDate
             tsInstalled    ts `shouldBe` Just (Version "2.1.118")
+
+        it "flags an update when behind (e.g. 2.1.118 -> 2.1.121)" $ do
+            let mocks = Map.fromList
+                    [ ("claude",
+                       mockResponse "2.1.118\n" "" (Milliseconds 30))
+                    , ("npm",
+                       mockResponse "2.1.121\n" "" (Milliseconds 200))
+                    ]
+                ts = runPureEff $ runProcMock mocks (checkTool ToolClaude)
+            tsAvailability ts `shouldBe` UpdateAvailable (Version "2.1.121")
