@@ -5,6 +5,7 @@ import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RepoInventory.RunSpec
 import qualified Krikit.Agent.Ops.Verify.CommonSpec
+import qualified Krikit.Agent.Ops.Verify.LlmChannelConsistencySpec
 import qualified Krikit.Agent.Ops.Verify.ReadingOrderSpec
 import qualified Krikit.Agent.Ops.Verify.RepoInventorySpec
 import qualified Krikit.Agent.Ops.Smoke.RunSpec
@@ -26,5 +27,6 @@ main = hspec $ do
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec
     Krikit.Agent.Ops.ConfigSpec.spec
     Krikit.Agent.Ops.Verify.CommonSpec.spec
+    Krikit.Agent.Ops.Verify.LlmChannelConsistencySpec.spec
     Krikit.Agent.Ops.Verify.ReadingOrderSpec.spec
     Krikit.Agent.Ops.Verify.RepoInventorySpec.spec

@@ -27,6 +27,7 @@ module Krikit.Agent.Ops.Config
     , PathsConfig (..)
     , EcosystemPaths (..)
     , FabricPaths (..)
+    , OpenclawPaths (..)
 
       -- * Constants
     , defaultConfigPath
@@ -63,6 +64,7 @@ data Config = Config
 data PathsConfig = PathsConfig
     { pcEcosystem :: !EcosystemPaths
     , pcFabric    :: !FabricPaths
+    , pcOpenclaw  :: !OpenclawPaths
     }
     deriving stock (Eq, Show)
 
@@ -83,6 +85,18 @@ data FabricPaths = FabricPaths
       -- ^ root of @krikit-agent-fabric\/agents\/@. Walked by the
       -- reading-order verifier to find every @AGENTS.md@ /
       -- @IDENTITY.md@.
+    }
+    deriving stock (Eq, Show)
+
+-- | Paths to OpenClaw runtime files. Typically absolute under
+-- @\/Users\/agentops\/.openclaw\/@ on the mini; the LLM-channel
+-- verifier reads them. Missing files are tolerated (verifier
+-- emits a 'Warning'), so this can carry mini-only paths in shared
+-- config without breaking off-mini runs.
+data OpenclawPaths = OpenclawPaths
+    { opConfigJson :: !FilePath
+      -- ^ absolute path to @openclaw.json@, e.g.
+      -- @\/Users\/agentops\/.openclaw\/openclaw.json@.
     }
     deriving stock (Eq, Show)
 
@@ -116,6 +130,7 @@ data RawConfig = RawConfig
 data RawPaths = RawPaths
     { rpEcosystem :: !RawEcosystemPaths
     , rpFabric    :: !RawFabricPaths
+    , rpOpenclaw  :: !RawOpenclawPaths
     }
 
 data RawEcosystemPaths = RawEcosystemPaths
@@ -130,6 +145,10 @@ data RawFabricPaths = RawFabricPaths
     , rfpAgentsDir         :: !FilePath
     }
 
+newtype RawOpenclawPaths = RawOpenclawPaths
+    { ropConfigJson :: FilePath
+    }
+
 instance FromJSON RawConfig where
     parseJSON = A.withObject "Config" $ \o ->
         RawConfig
@@ -141,6 +160,7 @@ instance FromJSON RawPaths where
         RawPaths
             <$> o .: "ecosystem"
             <*> o .: "fabric"
+            <*> o .: "openclaw"
 
 instance FromJSON RawEcosystemPaths where
     parseJSON = A.withObject "EcosystemPaths" $ \o ->
@@ -155,6 +175,11 @@ instance FromJSON RawFabricPaths where
             <$> o .: "system_state_mini_md"
             <*> o .: "repo_inventory_md"
             <*> o .: "agents_dir"
+
+instance FromJSON RawOpenclawPaths where
+    parseJSON = A.withObject "OpenclawPaths" $ \o ->
+        RawOpenclawPaths
+            <$> o .: "config_json"
 
 -- | Resolve every relative path in 'RawConfig' against the
 -- workspace root, producing the canonical absolute-path 'Config'.
@@ -173,11 +198,15 @@ absolutize RawConfig{..} =
                 , fpRepoInventoryMd   = under (rfpRepoInventoryMd rpFab)
                 , fpAgentsDir         = under (rfpAgentsDir rpFab)
                 }
+            , pcOpenclaw = OpenclawPaths
+                { opConfigJson = under (ropConfigJson rpOc)
+                }
             }
         }
   where
     rpEco = rpEcosystem rcPaths
     rpFab = rpFabric    rcPaths
+    rpOc  = rpOpenclaw  rcPaths
     under p
         | isAbsolute p = p                       -- already absolute: trust it
         | otherwise    = rcWorkspaceRoot </> p

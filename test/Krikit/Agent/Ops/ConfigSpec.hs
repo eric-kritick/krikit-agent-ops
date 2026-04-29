@@ -14,6 +14,7 @@ import           Krikit.Agent.Ops.Config
     ( Config (..)
     , EcosystemPaths (..)
     , FabricPaths (..)
+    , OpenclawPaths (..)
     , PathsConfig (..)
     , loadConfigFrom
     )
@@ -45,6 +46,9 @@ validJson = unlines
     , "      \"system_state_mini_md\": \"b/mini.md\","
     , "      \"repo_inventory_md\":    \"b/inv.md\","
     , "      \"agents_dir\":           \"b/agents\""
+    , "    },"
+    , "    \"openclaw\": {"
+    , "      \"config_json\": \"/abs/openclaw.json\""
     , "    }"
     , "  }"
     , "}"
@@ -76,6 +80,8 @@ spec = do
                 fpSystemStateMiniMd fab `shouldBe` "/ws/b/mini.md"
                 fpRepoInventoryMd fab   `shouldBe` "/ws/b/inv.md"
                 fpAgentsDir fab         `shouldBe` "/ws/b/agents"
+                let oc = pcOpenclaw (cfgPaths cfg)
+                opConfigJson oc         `shouldBe` "/abs/openclaw.json"
 
         it "preserves absolute paths verbatim" $ do
             withTempDir $ \dir -> do
@@ -93,6 +99,9 @@ spec = do
                     , "      \"system_state_mini_md\": \"b/mini.md\","
                     , "      \"repo_inventory_md\":    \"b/inv.md\","
                     , "      \"agents_dir\":           \"b/agents\""
+                    , "    },"
+                    , "    \"openclaw\": {"
+                    , "      \"config_json\": \"/abs/openclaw.json\""
                     , "    }"
                     , "  }"
                     , "}"
