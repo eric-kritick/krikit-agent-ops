@@ -1,5 +1,8 @@
 module Main (main) where
 
+import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
+import qualified Krikit.Agent.Ops.Regen.WriteSpec
+import qualified Krikit.Agent.Ops.RepoInventory.RunSpec
 import qualified Krikit.Agent.Ops.Smoke.RunSpec
 import qualified Krikit.Agent.Ops.Smoke.TierSpec
 import qualified Krikit.Agent.Ops.UpdateStatus.MacOSSpec
@@ -14,3 +17,6 @@ main = hspec $ do
     Krikit.Agent.Ops.UpdateStatus.VersionSpec.spec
     Krikit.Agent.Ops.UpdateStatus.RunSpec.spec
     Krikit.Agent.Ops.UpdateStatus.MacOSSpec.spec
+    Krikit.Agent.Ops.Regen.MarkdownExtractSpec.spec
+    Krikit.Agent.Ops.Regen.WriteSpec.spec
+    Krikit.Agent.Ops.RepoInventory.RunSpec.spec
