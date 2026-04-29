@@ -71,6 +71,7 @@ library
         Krikit.Agent.Ops.SystemStateMini.Run
         Krikit.Agent.Ops.Update.Run
         Krikit.Agent.Ops.Verify.Common
+        Krikit.Agent.Ops.Verify.ReadingOrder
         Krikit.Agent.Ops.Verify.RepoInventory
         Krikit.Agent.Ops.UpdateStatus.Tool
         Krikit.Agent.Ops.UpdateStatus.Version
@@ -198,6 +199,18 @@ executable krikit-verify-repo-inventory
         , text                 ^>=2.1
     default-language: GHC2021
 
+executable krikit-verify-reading-order
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/verify-reading-order
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+    default-language: GHC2021
+
 test-suite krikit-agent-ops-test
     import:           warnings
     type:             exitcode-stdio-1.0
@@ -209,6 +222,7 @@ test-suite krikit-agent-ops-test
         Krikit.Agent.Ops.Regen.WriteSpec
         Krikit.Agent.Ops.RepoInventory.RunSpec
         Krikit.Agent.Ops.Verify.CommonSpec
+        Krikit.Agent.Ops.Verify.ReadingOrderSpec
         Krikit.Agent.Ops.Verify.RepoInventorySpec
         Krikit.Agent.Ops.Smoke.RunSpec
         Krikit.Agent.Ops.Smoke.TierSpec

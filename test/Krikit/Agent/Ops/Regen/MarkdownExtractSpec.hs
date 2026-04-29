@@ -10,6 +10,7 @@ import           Krikit.Agent.Ops.Regen.MarkdownExtract
     ( MarkdownTable (..)
     , Section (..)
     , columnByHeader
+    , extractBacktickTokens
     , extractFirstTable
     , extractSection
     , extractTables
@@ -113,3 +114,52 @@ spec = do
                 Nothing  -> expectationFailure "expected Alpha section"
                 Just sec ->
                     secHeading sec `shouldBe` "Alpha"
+
+    describe "extractBacktickTokens" $ do
+        it "pulls every single-backtick token out of a line" $ do
+            let doc = "See `foo/bar.md` and `baz` for details."
+            extractBacktickTokens doc `shouldBe` ["foo/bar.md", "baz"]
+
+        it "preserves whitespace inside the span" $ do
+            let doc = "It says `  spaced  ` here."
+            extractBacktickTokens doc `shouldBe` ["  spaced  "]
+
+        it "drops empty spans (``)" $ do
+            let doc = "Empty `` should be skipped, but `kept` stays."
+            extractBacktickTokens doc `shouldBe` ["kept"]
+
+        it "skips contents of triple-backtick fenced code blocks" $ do
+            let doc = T.unlines
+                    [ "Before fence: `cited.md`."
+                    , ""
+                    , "```haskell"
+                    , "let x = `inside-block`"
+                    , "let y = `also-inside`"
+                    , "```"
+                    , ""
+                    , "After fence: `also-cited.md`."
+                    ]
+            extractBacktickTokens doc
+                `shouldBe` ["cited.md", "also-cited.md"]
+
+        it "is greedy: pairs a stray backtick with the next one" $ do
+            -- Edge case: a stray ` followed by a real `closed`
+            -- token gets paired greedily, leaving the trailing
+            -- "closed" unconsumed. Acceptable in practice because
+            -- looksLikePath downstream filters the prose-shaped
+            -- phantom out.
+            let doc = "Stray ` here, then `closed`."
+            extractBacktickTokens doc `shouldBe` [" here, then "]
+
+        it "handles the typical AGENTS.md citation pattern" $ do
+            let doc = T.unlines
+                    [ "## Embodied values (extends `../../USER.md` baseline)"
+                    , ""
+                    , "See `../../research/fp-best-practices.md` for"
+                    , "the synthesis. Also `forkIO` is bad."
+                    ]
+            extractBacktickTokens doc
+                `shouldBe` [ "../../USER.md"
+                           , "../../research/fp-best-practices.md"
+                           , "forkIO"
+                           ]

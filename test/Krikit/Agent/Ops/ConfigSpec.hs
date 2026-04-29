@@ -43,7 +43,8 @@ validJson = unlines
     , "    },"
     , "    \"fabric\": {"
     , "      \"system_state_mini_md\": \"b/mini.md\","
-    , "      \"repo_inventory_md\":    \"b/inv.md\""
+    , "      \"repo_inventory_md\":    \"b/inv.md\","
+    , "      \"agents_dir\":           \"b/agents\""
     , "    }"
     , "  }"
     , "}"
@@ -74,6 +75,7 @@ spec = do
                 let fab = pcFabric (cfgPaths cfg)
                 fpSystemStateMiniMd fab `shouldBe` "/ws/b/mini.md"
                 fpRepoInventoryMd fab   `shouldBe` "/ws/b/inv.md"
+                fpAgentsDir fab         `shouldBe` "/ws/b/agents"
 
         it "preserves absolute paths verbatim" $ do
             withTempDir $ \dir -> do
@@ -89,7 +91,8 @@ spec = do
                     , "    },"
                     , "    \"fabric\": {"
                     , "      \"system_state_mini_md\": \"b/mini.md\","
-                    , "      \"repo_inventory_md\":    \"b/inv.md\""
+                    , "      \"repo_inventory_md\":    \"b/inv.md\","
+                    , "      \"agents_dir\":           \"b/agents\""
                     , "    }"
                     , "  }"
                     , "}"

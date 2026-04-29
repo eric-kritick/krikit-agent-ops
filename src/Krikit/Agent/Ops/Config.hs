@@ -74,10 +74,15 @@ data EcosystemPaths = EcosystemPaths
     }
     deriving stock (Eq, Show)
 
--- | Outputs written into @krikit-agent-fabric@.
+-- | Paths inside @krikit-agent-fabric@ that the agent-ops binaries
+-- read or write.
 data FabricPaths = FabricPaths
     { fpSystemStateMiniMd :: !FilePath
     , fpRepoInventoryMd   :: !FilePath
+    , fpAgentsDir         :: !FilePath
+      -- ^ root of @krikit-agent-fabric\/agents\/@. Walked by the
+      -- reading-order verifier to find every @AGENTS.md@ /
+      -- @IDENTITY.md@.
     }
     deriving stock (Eq, Show)
 
@@ -122,6 +127,7 @@ data RawEcosystemPaths = RawEcosystemPaths
 data RawFabricPaths = RawFabricPaths
     { rfpSystemStateMiniMd :: !FilePath
     , rfpRepoInventoryMd   :: !FilePath
+    , rfpAgentsDir         :: !FilePath
     }
 
 instance FromJSON RawConfig where
@@ -148,6 +154,7 @@ instance FromJSON RawFabricPaths where
         RawFabricPaths
             <$> o .: "system_state_mini_md"
             <*> o .: "repo_inventory_md"
+            <*> o .: "agents_dir"
 
 -- | Resolve every relative path in 'RawConfig' against the
 -- workspace root, producing the canonical absolute-path 'Config'.
@@ -164,6 +171,7 @@ absolutize RawConfig{..} =
             , pcFabric = FabricPaths
                 { fpSystemStateMiniMd = under (rfpSystemStateMiniMd rpFab)
                 , fpRepoInventoryMd   = under (rfpRepoInventoryMd rpFab)
+                , fpAgentsDir         = under (rfpAgentsDir rpFab)
                 }
             }
         }

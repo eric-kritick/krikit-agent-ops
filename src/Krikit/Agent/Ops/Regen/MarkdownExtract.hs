@@ -35,6 +35,9 @@ module Krikit.Agent.Ops.Regen.MarkdownExtract
     , extractSection
     , sectionsByLevel
 
+      -- * Inline backtick spans
+    , extractBacktickTokens
+
       -- * Helpers
     , trimCell
     , isAlignmentRow
@@ -206,3 +209,52 @@ parseHeading line =
     in  if n >= 1 && n <= 6 && not (T.null rest) && T.head rest == ' '
             then Just (n, T.strip (T.drop 1 rest))
             else Nothing
+
+-- =============================================================================
+-- Inline backtick spans
+-- =============================================================================
+
+-- | Extract every single-backtick-wrapped token from a markdown
+-- document, in document order.
+--
+-- Triple-backtick fenced code blocks are skipped entirely (their
+-- contents are not parsed for inline spans). Inline code spans
+-- inside fenced blocks would otherwise generate huge amounts of
+-- noise for kritick / krikit AGENTS.md files which embed PureScript
+-- and Haskell snippets.
+--
+-- Empty spans (@``@) and spans containing only backticks are
+-- dropped. Surrounding whitespace inside the span is preserved so
+-- the caller can decide what trimming to apply.
+extractBacktickTokens :: Text -> [Text]
+extractBacktickTokens doc =
+    concatMap parseLine (skipFences (T.lines doc))
+  where
+    -- | Drop fenced-code blocks. A block starts and ends with a
+    -- line whose trimmed form starts with @```@.
+    skipFences :: [Text] -> [Text]
+    skipFences = go False
+      where
+        go :: Bool -> [Text] -> [Text]
+        go _      []       = []
+        go inside (l : ls)
+            | "```" `T.isPrefixOf` T.stripStart l = go (not inside) ls
+            | inside    = go inside ls
+            | otherwise = l : go inside ls
+
+    -- | Pull every single-backtick token out of one line.
+    -- A token is the text between two single backticks; double
+    -- and triple backticks are not handled (the fence skip above
+    -- removes the only place those matter for our use case).
+    parseLine :: Text -> [Text]
+    parseLine line = go (T.unpack line) []
+      where
+        -- Accumulate characters between matched backticks.
+        go :: String -> [Text] -> [Text]
+        go [] acc = reverse acc
+        go ('`' : rest) acc = case break (== '`') rest of
+            (token, '`' : after)
+                | not (null token) -> go after (T.pack token : acc)
+                | otherwise        -> go after acc
+            _                      -> reverse acc   -- unmatched; bail
+        go (_ : rest) acc = go rest acc
