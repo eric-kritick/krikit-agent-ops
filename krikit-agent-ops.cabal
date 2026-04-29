@@ -63,6 +63,7 @@ library
         Krikit.Agent.Ops.UpdateStatus.Refresh
         Krikit.Agent.Ops.UpdateStatus.Report
         Krikit.Agent.Ops.UpdateStatus.Run
+        Krikit.Agent.Ops.CrossReferenceIndex.Run
         Krikit.Agent.Ops.Regen.Banner
         Krikit.Agent.Ops.Regen.FsWalk
         Krikit.Agent.Ops.Regen.MarkdownExtract
@@ -188,6 +189,18 @@ executable krikit-regen-repo-inventory
         , text                 ^>=2.1
     default-language: GHC2021
 
+executable krikit-regen-cross-reference-index
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/regen-cross-reference-index
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+    default-language: GHC2021
+
 executable krikit-verify-repo-inventory
     import:           warnings
     main-is:          Main.hs
@@ -231,6 +244,7 @@ test-suite krikit-agent-ops-test
     main-is:          Spec.hs
     other-modules:
         Krikit.Agent.Ops.ConfigSpec
+        Krikit.Agent.Ops.CrossReferenceIndex.RunSpec
         Krikit.Agent.Ops.Regen.MarkdownExtractSpec
         Krikit.Agent.Ops.Regen.WriteSpec
         Krikit.Agent.Ops.RepoInventory.RunSpec

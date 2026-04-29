@@ -73,15 +73,22 @@ data EcosystemPaths = EcosystemPaths
     { epInfrastructureMacminiJson :: !FilePath
     , epEcosystemJson             :: !FilePath
     , epEcosystemRootsMd          :: !FilePath
+    , epDocsDir                   :: !FilePath
+      -- ^ @kritick-ecosystem\/docs\/@. Walked recursively for every
+      -- @*.md@ by the cross-reference-index generator.
     }
     deriving stock (Eq, Show)
 
 -- | Paths inside @krikit-agent-fabric@ that the agent-ops binaries
 -- read or write.
 data FabricPaths = FabricPaths
-    { fpSystemStateMiniMd :: !FilePath
-    , fpRepoInventoryMd   :: !FilePath
-    , fpAgentsDir         :: !FilePath
+    { fpRoot                  :: !FilePath
+      -- ^ root of @krikit-agent-fabric\/@. Walked recursively for
+      -- every @*.md@ by the cross-reference-index generator.
+    , fpSystemStateMiniMd     :: !FilePath
+    , fpRepoInventoryMd       :: !FilePath
+    , fpCrossReferenceIndexMd :: !FilePath
+    , fpAgentsDir             :: !FilePath
       -- ^ root of @krikit-agent-fabric\/agents\/@. Walked by the
       -- reading-order verifier to find every @AGENTS.md@ /
       -- @IDENTITY.md@.
@@ -137,12 +144,15 @@ data RawEcosystemPaths = RawEcosystemPaths
     { repInfrastructureMacminiJson :: !FilePath
     , repEcosystemJson             :: !FilePath
     , repEcosystemRootsMd          :: !FilePath
+    , repDocsDir                   :: !FilePath
     }
 
 data RawFabricPaths = RawFabricPaths
-    { rfpSystemStateMiniMd :: !FilePath
-    , rfpRepoInventoryMd   :: !FilePath
-    , rfpAgentsDir         :: !FilePath
+    { rfpRoot                  :: !FilePath
+    , rfpSystemStateMiniMd     :: !FilePath
+    , rfpRepoInventoryMd       :: !FilePath
+    , rfpCrossReferenceIndexMd :: !FilePath
+    , rfpAgentsDir             :: !FilePath
     }
 
 newtype RawOpenclawPaths = RawOpenclawPaths
@@ -168,12 +178,15 @@ instance FromJSON RawEcosystemPaths where
             <$> o .: "infrastructure_macmini_json"
             <*> o .: "ecosystem_json"
             <*> o .: "ecosystem_roots_md"
+            <*> o .: "docs_dir"
 
 instance FromJSON RawFabricPaths where
     parseJSON = A.withObject "FabricPaths" $ \o ->
         RawFabricPaths
-            <$> o .: "system_state_mini_md"
+            <$> o .: "root"
+            <*> o .: "system_state_mini_md"
             <*> o .: "repo_inventory_md"
+            <*> o .: "cross_reference_index_md"
             <*> o .: "agents_dir"
 
 instance FromJSON RawOpenclawPaths where
@@ -192,11 +205,14 @@ absolutize RawConfig{..} =
                 { epInfrastructureMacminiJson = under (repInfrastructureMacminiJson rpEco)
                 , epEcosystemJson             = under (repEcosystemJson rpEco)
                 , epEcosystemRootsMd          = under (repEcosystemRootsMd rpEco)
+                , epDocsDir                   = under (repDocsDir rpEco)
                 }
             , pcFabric = FabricPaths
-                { fpSystemStateMiniMd = under (rfpSystemStateMiniMd rpFab)
-                , fpRepoInventoryMd   = under (rfpRepoInventoryMd rpFab)
-                , fpAgentsDir         = under (rfpAgentsDir rpFab)
+                { fpRoot                  = under (rfpRoot rpFab)
+                , fpSystemStateMiniMd     = under (rfpSystemStateMiniMd rpFab)
+                , fpRepoInventoryMd       = under (rfpRepoInventoryMd rpFab)
+                , fpCrossReferenceIndexMd = under (rfpCrossReferenceIndexMd rpFab)
+                , fpAgentsDir             = under (rfpAgentsDir rpFab)
                 }
             , pcOpenclaw = OpenclawPaths
                 { opConfigJson = under (ropConfigJson rpOc)

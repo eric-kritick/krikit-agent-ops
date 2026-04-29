@@ -1,6 +1,7 @@
 module Main (main) where
 
 import qualified Krikit.Agent.Ops.ConfigSpec
+import qualified Krikit.Agent.Ops.CrossReferenceIndex.RunSpec
 import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RepoInventory.RunSpec
@@ -26,6 +27,7 @@ main = hspec $ do
     Krikit.Agent.Ops.Regen.WriteSpec.spec
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec
     Krikit.Agent.Ops.ConfigSpec.spec
+    Krikit.Agent.Ops.CrossReferenceIndex.RunSpec.spec
     Krikit.Agent.Ops.Verify.CommonSpec.spec
     Krikit.Agent.Ops.Verify.LlmChannelConsistencySpec.spec
     Krikit.Agent.Ops.Verify.ReadingOrderSpec.spec

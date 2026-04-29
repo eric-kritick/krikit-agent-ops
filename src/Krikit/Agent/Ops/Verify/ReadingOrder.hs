@@ -38,14 +38,12 @@ module Krikit.Agent.Ops.Verify.ReadingOrder
     , verify
     ) where
 
-import           Control.Exception                        (IOException, try)
-import           Data.List                                (nub, sort)
+import           Data.List                                (isSuffixOf, nub)
 import           Data.Text                                (Text)
 import qualified Data.Text                                as T
 import qualified Data.Text.IO                             as TIO
-import           System.Directory                         (doesPathExist,
-                                                           doesDirectoryExist,
-                                                           listDirectory)
+import           System.Directory                         (doesDirectoryExist,
+                                                           doesPathExist)
 import           System.FilePath                          (joinPath,
                                                            splitDirectories,
                                                            takeDirectory,
@@ -59,6 +57,7 @@ import           Krikit.Agent.Ops.Config
     , FabricPaths (..)
     , PathsConfig (..)
     )
+import           Krikit.Agent.Ops.Regen.FsWalk            (findFilesRec)
 import           Krikit.Agent.Ops.Regen.MarkdownExtract   (extractBacktickTokens)
 import           Krikit.Agent.Ops.Verify.Common           (Finding (..),
                                                            Severity (..))
@@ -85,7 +84,7 @@ import           Krikit.Agent.Ops.Verify.Common           (Finding (..),
 -- a less-common extension, extend 'pathLikeExtensions'.
 looksLikePath :: Text -> Bool
 looksLikePath t =
-    let s = T.strip t
+    let s = stripAnchor (T.strip t)
     in  not (T.null s)
      && "/" `T.isInfixOf` s
      && not ("://"  `T.isInfixOf` s)
@@ -188,40 +187,13 @@ verify = do
             allFinds <- liftIO (mapM (verifyOne agentsDir) files)
             pure (Right (concat allFinds))
 
--- | Walk @root@ recursively (one level deep is enough for the
--- @agents/<id>/{AGENTS,IDENTITY}.md@ shape, but stay general) and
--- collect every @AGENTS.md@ / @IDENTITY.md@.
+-- | Walk @root@ recursively, collecting every file whose name is
+-- @AGENTS.md@ or @IDENTITY.md@.
 findAgentsAndIdentityFiles :: FilePath -> IO [FilePath]
-findAgentsAndIdentityFiles root = do
-    entries <- listDirectorySafe root
-    let visible = filter (not . isHidden) entries
-    fmap (sort . concat) . mapM dispatch $ map (root </>) visible
-  where
-    dispatch :: FilePath -> IO [FilePath]
-    dispatch p = do
-        isDir <- doesDirectoryExist p
-        if isDir
-            then findAgentsAndIdentityFiles p
-            else pure
-                $  [ p | endsWith p "AGENTS.md"  ]
-                ++ [ p | endsWith p "IDENTITY.md" ]
-
-    endsWith :: FilePath -> String -> Bool
-    endsWith full name =
-        let n = length name
-            l = length full
-        in  l >= n && drop (l - n) full == name
-
-    isHidden :: FilePath -> Bool
-    isHidden ('.' : _) = True
-    isHidden _         = False
-
-listDirectorySafe :: FilePath -> IO [FilePath]
-listDirectorySafe p = do
-    r <- try (listDirectory p)
-    case r of
-        Left (_ :: IOException) -> pure []
-        Right xs                -> pure xs
+findAgentsAndIdentityFiles root =
+    findFilesRec root (\p ->
+        "AGENTS.md"   `isSuffixOf` p
+     || "IDENTITY.md" `isSuffixOf` p)
 
 -- | Verify one citing file. Read its contents, extract backtick
 -- tokens, filter to file-shaped, resolve each, check existence,

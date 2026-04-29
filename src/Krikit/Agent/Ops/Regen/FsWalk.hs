@@ -11,6 +11,7 @@ module Krikit.Agent.Ops.Regen.FsWalk
     ( -- * Operations
       listRepoDirs
     , listSubdirs
+    , findFilesRec
     ) where
 
 import           Control.Exception        (IOException, try)
@@ -58,3 +59,36 @@ listSubdirs root = do
 -- entry of any kind exists at @root\/name\/.git@.
 looksLikeRepo :: FilePath -> String -> IO Bool
 looksLikeRepo root name = doesPathExist (root </> name </> ".git")
+
+-- | Recursively find files under @root@ whose path satisfies the
+-- predicate. Sorted output for stable downstream behavior.
+-- Hidden entries (leading @.@) are skipped at every level.
+--
+-- Used by both the cross-reference-index generator (find every
+-- @*.md@ under fabric) and the reading-order verifier (find every
+-- @AGENTS.md@ \/ @IDENTITY.md@ under fabric\/agents). Pure Haskell;
+-- no shelling out to @find@ \/ @rg --files@.
+findFilesRec :: FilePath -> (FilePath -> Bool) -> IO [FilePath]
+findFilesRec root pred_ = do
+    entries <- listDirectorySafe root
+    let visible = filter (not . isHidden) entries
+    found    <- mapM (dispatch . (root </>)) visible
+    pure (sort (concat found))
+  where
+    dispatch :: FilePath -> IO [FilePath]
+    dispatch p = do
+        isDir <- doesDirectoryExist p
+        if isDir
+            then findFilesRec p pred_
+            else pure ([p | pred_ p])
+
+    isHidden :: FilePath -> Bool
+    isHidden ('.' : _) = True
+    isHidden _         = False
+
+    listDirectorySafe :: FilePath -> IO [FilePath]
+    listDirectorySafe p = do
+        r <- try (listDirectory p)
+        case r of
+            Left (_ :: IOException) -> pure []
+            Right xs                -> pure xs
