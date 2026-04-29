@@ -1,5 +1,6 @@
 module Main (main) where
 
+import qualified Krikit.Agent.Ops.ConfigSpec
 import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RepoInventory.RunSpec
@@ -20,3 +21,4 @@ main = hspec $ do
     Krikit.Agent.Ops.Regen.MarkdownExtractSpec.spec
     Krikit.Agent.Ops.Regen.WriteSpec.spec
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec
+    Krikit.Agent.Ops.ConfigSpec.spec

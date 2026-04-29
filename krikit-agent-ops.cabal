@@ -46,6 +46,7 @@ library
     import:           warnings, deps
     exposed-modules:
         Krikit.Agent.Ops.Agent
+        Krikit.Agent.Ops.Config
         Krikit.Agent.Ops.Service
         Krikit.Agent.Ops.Units
         Krikit.Agent.Ops.Effect.Log
@@ -165,10 +166,10 @@ executable krikit-regen-system-state-mini
     hs-source-dirs:   app/regen-system-state-mini
     build-depends:
         , base                 ^>=4.22
+        , effectful            ^>=2.6
         , krikit-agent-ops
         , optparse-applicative ^>=0.19
         , text                 ^>=2.1
-        , time                 >=1.12 && <1.15
     default-language: GHC2021
 
 executable krikit-regen-repo-inventory
@@ -177,10 +178,10 @@ executable krikit-regen-repo-inventory
     hs-source-dirs:   app/regen-repo-inventory
     build-depends:
         , base                 ^>=4.22
+        , effectful            ^>=2.6
         , krikit-agent-ops
         , optparse-applicative ^>=0.19
         , text                 ^>=2.1
-        , time                 >=1.12 && <1.15
     default-language: GHC2021
 
 test-suite krikit-agent-ops-test
@@ -189,6 +190,7 @@ test-suite krikit-agent-ops-test
     hs-source-dirs:   test
     main-is:          Spec.hs
     other-modules:
+        Krikit.Agent.Ops.ConfigSpec
         Krikit.Agent.Ops.Regen.MarkdownExtractSpec
         Krikit.Agent.Ops.Regen.WriteSpec
         Krikit.Agent.Ops.RepoInventory.RunSpec

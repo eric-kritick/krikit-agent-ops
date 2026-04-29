@@ -44,6 +44,9 @@ module Krikit.Agent.Ops.RepoInventory.Run
 
       -- * Rendering
     , renderInventory
+
+      -- * Effectful orchestrator
+    , regenerate
     ) where
 
 import           Control.Exception                    (IOException, try)
@@ -58,11 +61,27 @@ import           Data.Set                             (Set)
 import qualified Data.Set                             as Set
 import           Data.Text                            (Text)
 import qualified Data.Text                            as T
+import qualified Data.Text.IO                         as TIO
+import qualified Data.Time                            as Time
 
+import           Effectful                            (Eff, IOE, liftIO, (:>))
+import           Effectful.Reader.Static              (Reader, ask)
+
+import           Krikit.Agent.Ops.Config
+    ( Config (..)
+    , EcosystemPaths (..)
+    , FabricPaths (..)
+    , PathsConfig (..)
+    )
 import           Krikit.Agent.Ops.Regen.Banner
     ( Banner (..)
     , BannerInputs (..)
     , renderBanner
+    )
+import           Krikit.Agent.Ops.Regen.FsWalk        (listRepoDirs)
+import           Krikit.Agent.Ops.Regen.Write
+    ( WriteOutcome
+    , writeIfChanged
     )
 import           Krikit.Agent.Ops.Regen.MarkdownExtract
     ( MarkdownTable (..)
@@ -452,3 +471,44 @@ renderInventory isoDate inv =
     blurbLines cat =
         let b = categoryBlurb cat
         in  if T.null b then [] else [b, ""]
+
+-- =============================================================================
+-- Effectful orchestrator
+-- =============================================================================
+
+-- | End-to-end regen: pull paths from @'Reader' 'Config'@, read the
+-- canonical inputs, classify, write idempotently. Returns
+-- @'Left' err@ on input failure or @'Right' outcome@ on success.
+regenerate
+    :: ( Reader Config :> es
+       , IOE :> es
+       )
+    => Eff es (Either Text (FilePath, WriteOutcome))
+regenerate = do
+    cfg <- ask
+    let rootsPath = epEcosystemRootsMd  . pcEcosystem . cfgPaths $ cfg
+        ecoPath   = epEcosystemJson     . pcEcosystem . cfgPaths $ cfg
+        outPath   = fpRepoInventoryMd   . pcFabric    . cfgPaths $ cfg
+        wsRoot    = cfgWorkspaceRoot cfg
+
+    today    <- liftIO isoDateUTC
+    rootsDoc <- liftIO (TIO.readFile rootsPath)
+    fsRepos  <- liftIO (listRepoDirs wsRoot)
+    filterE  <- liftIO (readEcosystemFilter ecoPath)
+    case filterE of
+        Left err -> pure (Left err)
+        Right f  -> do
+            let kritickRepos = extractEcosystemRoots rootsDoc
+                allRepos     = applyFilter f (kritickRepos ++ fsRepos)
+                inv          = buildInventory allRepos
+                body         = renderInventory today inv
+            outcome <- liftIO (writeIfChanged outPath body)
+            pure (Right (outPath, outcome))
+
+-- | Today\'s date in @YYYY-MM-DD@. Used only for the banner\'s
+-- @Last generated@ line; the writer scrubs that line during
+-- idempotency comparison.
+isoDateUTC :: IO Text
+isoDateUTC = do
+    now <- Time.getCurrentTime
+    pure (T.pack (Time.showGregorian (Time.utctDay now)))

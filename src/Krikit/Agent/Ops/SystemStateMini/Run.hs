@@ -17,16 +17,19 @@
 -- needs to know without parsing JSON.
 module Krikit.Agent.Ops.SystemStateMini.Run
     ( -- * Domain types
-      Config (..)
+      InfraConfig (..)
     , LLMChannel (..)
     , Service (..)
     , HardeningItem (..)
 
       -- * IO
-    , readConfig
+    , readInfraConfig
 
       -- * Pure rendering
     , renderReport
+
+      -- * Effectful orchestrator
+    , regenerate
     ) where
 
 import           Data.Aeson                       (FromJSON (..), Value, (.:), (.:?))
@@ -39,11 +42,25 @@ import           Data.List                        (sortOn)
 import           Data.Maybe                       (fromMaybe)
 import           Data.Text                        (Text)
 import qualified Data.Text                        as T
+import qualified Data.Time                        as Time
 
+import           Effectful                        (Eff, IOE, liftIO, (:>))
+import           Effectful.Reader.Static          (Reader, ask)
+
+import           Krikit.Agent.Ops.Config
+    ( Config (..)
+    , EcosystemPaths (..)
+    , FabricPaths (..)
+    , PathsConfig (..)
+    )
 import           Krikit.Agent.Ops.Regen.Banner
     ( Banner (..)
     , BannerInputs (..)
     , renderBanner
+    )
+import           Krikit.Agent.Ops.Regen.Write
+    ( WriteOutcome
+    , writeIfChanged
     )
 
 -- =============================================================================
@@ -53,12 +70,12 @@ import           Krikit.Agent.Ops.Regen.Banner
 -- | Top-level config we care about. Many fields in the JSON are
 -- irrelevant to the agent-facing view (network phases, knowledge
 -- base IDs, etc.); we only decode what gets rendered.
-data Config = Config
-    { cfgHostName    :: !Text
-    , cfgLLMChannels :: ![(Text, LLMChannel)]
+data InfraConfig = InfraConfig
+    { icHostName    :: !Text
+    , icLLMChannels :: ![(Text, LLMChannel)]
       -- ^ key = channel id (sentry, workhorse, ...) preserving JSON order
-    , cfgServices    :: ![(Text, Service)]
-    , cfgHardening   :: ![(Text, HardeningItem)]
+    , icServices    :: ![(Text, Service)]
+    , icHardening   :: ![(Text, HardeningItem)]
     }
     deriving stock (Eq, Show)
 
@@ -97,8 +114,8 @@ data HardeningItem = HardeningItem
 -- order in the rendered output. KeyMap is unordered, so for
 -- deterministic markdown we sort keys alphabetically except where a
 -- known canonical ordering applies (see 'channelOrder').
-instance FromJSON Config where
-    parseJSON = A.withObject "Config" $ \o -> do
+instance FromJSON InfraConfig where
+    parseJSON = A.withObject "InfraConfig" $ \o -> do
         host       <- o .: "host"
         hostName   <- host .: "name"
 
@@ -115,11 +132,11 @@ instance FromJSON Config where
         hardeningObj <- o .: "hardening"
         hardeningPairs <- mapKeyMap parseHardening hardeningObj
 
-        pure Config
-            { cfgHostName    = hostName
-            , cfgLLMChannels = sortOnKey channelOrder llmPairs
-            , cfgServices    = sortOn fst servicePairs
-            , cfgHardening   = sortOn fst hardeningPairs
+        pure InfraConfig
+            { icHostName    = hostName
+            , icLLMChannels = sortOnKey channelOrder llmPairs
+            , icServices    = sortOn fst servicePairs
+            , icHardening   = sortOn fst hardeningPairs
             }
 
 parseChannel :: Value -> AT.Parser LLMChannel
@@ -211,12 +228,13 @@ sortOnKey f = sortOn (f . fst)
 -- | Read and parse the canonical mini infrastructure JSON. Errors
 -- are surfaced as @Text@ rather than throwing -- the caller
 -- (executable @Main@) is responsible for exit codes.
-readConfig :: FilePath -> IO (Either Text Config)
-readConfig path = do
+readInfraConfig :: FilePath -> IO (Either Text InfraConfig)
+readInfraConfig path = do
     bytes <- LBS.readFile path
     case A.eitherDecode bytes of
-        Left err  -> pure (Left ("could not parse " <> T.pack path <> ": " <> T.pack err))
-        Right cfg -> pure (Right cfg)
+        Left err -> pure (Left ("could not parse " <> T.pack path
+                                <> ": " <> T.pack err))
+        Right c  -> pure (Right c)
 
 -- =============================================================================
 -- Rendering
@@ -227,28 +245,28 @@ readConfig path = do
 -- normalizes that line away during idempotency comparison.
 renderReport
     :: Text     -- ^ ISO date for the @Last generated@ banner line
-    -> Config
+    -> InfraConfig
     -> Text
-renderReport isoDate cfg =
+renderReport isoDate ic =
     T.unlines
         [ "# System state — mini"
         , ""
         , renderBanner banner
         , ""
         , "Snapshot of current operational configuration on **"
-            <> cfgHostName cfg
+            <> icHostName ic
             <> "** (the kritick agent host). For broader kritick"
             <> " infrastructure (AWS topology, MongoDB Atlas cluster,"
             <> " OpenSearch domain, ElastiCache, GitHub repos), see"
             <> " `system-state-kritick.generated.md`."
         , ""
-        , renderLLMChannels (cfgLLMChannels cfg)
+        , renderLLMChannels (icLLMChannels ic)
         , ""
         , effortWiringSection
         , ""
-        , renderServices (cfgServices cfg)
+        , renderServices (icServices ic)
         , ""
-        , renderHardening (cfgHardening cfg)
+        , renderHardening (icHardening ic)
         , ""
         , gapsSection
         ]
@@ -334,3 +352,39 @@ gapsSection = T.unlines
     , ""
     , "See `current-priorities.md`."
     ]
+
+-- =============================================================================
+-- Effectful orchestrator
+-- =============================================================================
+
+-- | End-to-end regen: pull paths from @'Reader' 'Config'@, read the
+-- canonical JSON, render, write idempotently. Returns
+-- @'Left' err@ on input read/parse failure or @'Right' outcome@ on
+-- success. The caller (@Main@) decides how to log and what exit
+-- code to use.
+regenerate
+    :: ( Reader Config :> es
+       , IOE :> es
+       )
+    => Eff es (Either Text (FilePath, WriteOutcome))
+regenerate = do
+    cfg <- ask
+    let inputPath  = epInfrastructureMacminiJson . pcEcosystem . cfgPaths $ cfg
+        outputPath = fpSystemStateMiniMd        . pcFabric    . cfgPaths $ cfg
+
+    today  <- liftIO isoDateUTC
+    infraE <- liftIO (readInfraConfig inputPath)
+    case infraE of
+        Left err    -> pure (Left err)
+        Right infra -> do
+            let body = renderReport today infra
+            outcome <- liftIO (writeIfChanged outputPath body)
+            pure (Right (outputPath, outcome))
+
+-- | Today\'s date in @YYYY-MM-DD@. Only used for the banner\'s
+-- @Last generated@ line; the writer scrubs that line during
+-- idempotency comparison so the date doesn\'t churn the file.
+isoDateUTC :: IO Text
+isoDateUTC = do
+    now <- Time.getCurrentTime
+    pure (T.pack (Time.showGregorian (Time.utctDay now)))
