@@ -70,6 +70,7 @@ library
         Krikit.Agent.Ops.Monitor.Digest
         Krikit.Agent.Ops.Monitor.Run
         Krikit.Agent.Ops.Monitor.State
+        Krikit.Agent.Ops.Regen.AutoDisable
         Krikit.Agent.Ops.Regen.Banner
         Krikit.Agent.Ops.Regen.FsWalk
         Krikit.Agent.Ops.Regen.MarkdownExtract
@@ -280,6 +281,7 @@ test-suite krikit-agent-ops-test
         Krikit.Agent.Ops.Monitor.CheckSpec
         Krikit.Agent.Ops.Monitor.DigestSpec
         Krikit.Agent.Ops.Monitor.StateSpec
+        Krikit.Agent.Ops.Regen.AutoDisableSpec
         Krikit.Agent.Ops.Regen.MarkdownExtractSpec
         Krikit.Agent.Ops.Regen.WriteSpec
         Krikit.Agent.Ops.RegenSummary.RunSpec

@@ -109,7 +109,7 @@ spec = do
                                         <> show other)
 
     describe "renderRegenLine" $ do
-        let job n = RegenJob n (T.unpack n <> ".log")
+        let job n = RegenJob n (T.unpack n <> ".log") (Just n)
 
         it "best case: all ok, all unchanged" $ do
             let pairs =
@@ -141,8 +141,30 @@ spec = do
             renderRegenLine pairs
                 `shouldBe` "Regen: 2/4 ok (2 failed: workspace-sync, cross-reference-index; 1 written: repo-inventory)"
 
+        it "names disabled jobs in their own slot" $ do
+            let pairs =
+                    [ (job "workspace-sync",        RegenSyncOk 290 0)
+                    , (job "system-state-mini",     RegenDisabled "marker body")
+                    , (job "repo-inventory",        RegenOk Unchanged)
+                    , (job "cross-reference-index", RegenOk Unchanged)
+                    ]
+            renderRegenLine pairs
+                `shouldBe` "Regen: 3/4 ok (1 disabled: system-state-mini)"
+
+        it "lists disabled before failed before written" $ do
+            let pairs =
+                    [ (job "workspace-sync",        RegenSyncFail 287 3)
+                    , (job "system-state-mini",     RegenDisabled "x")
+                    , (job "repo-inventory",        RegenOk Written)
+                    , (job "cross-reference-index", RegenOk Unchanged)
+                    ]
+            -- 2/4 ok: written + unchanged each count toward "ok"
+            -- (the regenerator did its job); disabled and failed don't.
+            renderRegenLine pairs
+                `shouldBe` "Regen: 2/4 ok (1 disabled: system-state-mini; 1 failed: workspace-sync; 1 written: repo-inventory)"
+
     describe "renderVerifyLine" $ do
-        let job n = VerifyJob n (T.unpack n <> ".log")
+        let job n = VerifyJob n (T.unpack n <> ".log") (Just n)
 
         it "all clean" $ do
             let pairs =
@@ -169,6 +191,24 @@ spec = do
                     ]
             renderVerifyLine pairs
                 `shouldBe` "Verify: 1 clean, 1 warn, 1 err (err: repo-inventory)"
+
+        it "disabled-only -- no err: prefix, just disabled:" $ do
+            let pairs =
+                    [ (job "reading-order",  VerifyClean)
+                    , (job "llm-channel",    VerifyDisabled "marker body")
+                    , (job "repo-inventory", VerifyClean)
+                    ]
+            renderVerifyLine pairs
+                `shouldBe` "Verify: 2 clean, 1 disabled (disabled: llm-channel)"
+
+        it "errors and disabled in the same suffix" $ do
+            let pairs =
+                    [ (job "reading-order",  VerifyClean)
+                    , (job "llm-channel",    VerifyDisabled "marker body")
+                    , (job "repo-inventory", VerifyErr 1 0)
+                    ]
+            renderVerifyLine pairs
+                `shouldBe` "Verify: 1 clean, 1 err, 1 disabled (err: repo-inventory; disabled: llm-channel)"
 
     describe "renderSummary" $ do
         it "emits exactly two lines separated by \\n" $ do

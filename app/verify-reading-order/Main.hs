@@ -12,7 +12,8 @@
 --
 --   * 0  — clean
 --   * 1  — warnings only
---   * 2  — at least one error (broken citation)
+--   * 2  — at least one error (broken citation; counts toward
+--          three-strikes auto-disable)
 --   * 3  — input failure (missing config or unreadable agents_dir)
 module Main (main) where
 
@@ -34,14 +35,17 @@ import           Options.Applicative
     , strOption
     , (<**>)
     )
-import           System.Exit                              (ExitCode (..),
-                                                           exitWith)
+import           System.Exit                              (ExitCode (..))
 import           System.IO                                (hPutStrLn, stderr)
 
 import           Effectful                                (runEff)
 import           Effectful.Reader.Static                  (runReader)
 
 import           Krikit.Agent.Ops.Config                  (loadConfig)
+import           Krikit.Agent.Ops.Regen.AutoDisable
+    ( defaultStateDir
+    , runWithAutoDisable
+    )
 import           Krikit.Agent.Ops.Verify.Common
     ( exitForFindings
     , renderFindings
@@ -71,19 +75,23 @@ main = do
             <> progDesc "Verify every backtick-cited path in AGENTS.md / IDENTITY.md exists"
             <> header   "krikit-verify-reading-order"
             )
+    runWithAutoDisable "verify-reading-order" defaultStateDir
+                       (run override)
 
+run :: Maybe FilePath -> IO ExitCode
+run override = do
     cfgE <- loadConfig override
-    cfg  <- case cfgE of
-        Right c  -> pure c
+    case cfgE of
         Left err -> do
             hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitWith (ExitFailure 3)
-
-    result <- runEff . runReader cfg $ verify
-    case result of
-        Left err -> do
-            hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitWith (ExitFailure 3)
-        Right findings -> do
-            TIO.putStr (renderFindings "krikit-verify-reading-order" findings)
-            exitWith (exitForFindings findings)
+            pure (ExitFailure 3)
+        Right cfg -> do
+            result <- runEff . runReader cfg $ verify
+            case result of
+                Left err -> do
+                    hPutStrLn stderr ("FAIL: " <> T.unpack err)
+                    pure (ExitFailure 3)
+                Right findings -> do
+                    TIO.putStr
+                        (renderFindings "krikit-verify-reading-order" findings)
+                    pure (exitForFindings findings)

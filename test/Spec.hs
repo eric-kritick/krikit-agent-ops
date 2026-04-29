@@ -6,6 +6,7 @@ import qualified Krikit.Agent.Ops.Effect.TelegramSpec
 import qualified Krikit.Agent.Ops.Monitor.CheckSpec
 import qualified Krikit.Agent.Ops.Monitor.DigestSpec
 import qualified Krikit.Agent.Ops.Monitor.StateSpec
+import qualified Krikit.Agent.Ops.Regen.AutoDisableSpec
 import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RegenSummary.RunSpec
@@ -28,6 +29,7 @@ main = hspec $ do
     Krikit.Agent.Ops.UpdateStatus.VersionSpec.spec
     Krikit.Agent.Ops.UpdateStatus.RunSpec.spec
     Krikit.Agent.Ops.UpdateStatus.MacOSSpec.spec
+    Krikit.Agent.Ops.Regen.AutoDisableSpec.spec
     Krikit.Agent.Ops.Regen.MarkdownExtractSpec.spec
     Krikit.Agent.Ops.Regen.WriteSpec.spec
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec

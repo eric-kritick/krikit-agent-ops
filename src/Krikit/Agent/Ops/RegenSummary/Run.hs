@@ -22,6 +22,15 @@
 -- Verify: 3\/3 clean
 -- @
 --
+-- When a job has been auto-disabled (three strikes, see
+-- 'Krikit.Agent.Ops.Regen.AutoDisable'), it's named in the
+-- summary so the operator notices in the daily digest:
+--
+-- @
+-- Regen: 3\/4 ok (1 disabled: system-state-mini)
+-- Verify: 2\/3 clean (1 disabled: llm-channel)
+-- @
+--
 -- Pure parsing + rendering live here; the orchestrator just
 -- reads files and dispatches.
 module Krikit.Agent.Ops.RegenSummary.Run
@@ -49,14 +58,19 @@ module Krikit.Agent.Ops.RegenSummary.Run
     , defaultVerifyJobs
     ) where
 
-import           Control.Exception   (IOException, try)
-import           Data.Maybe          (mapMaybe)
-import           Data.Text           (Text)
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as TIO
-import           System.Directory    (doesFileExist)
-import           System.FilePath     ((</>))
-import           Text.Read           (readMaybe)
+import           Control.Exception                       (IOException, try)
+import           Data.Maybe                              (mapMaybe)
+import           Data.Text                               (Text)
+import qualified Data.Text                               as T
+import qualified Data.Text.IO                            as TIO
+import           System.Directory                        (doesFileExist)
+import           System.FilePath                         ((</>))
+import           Text.Read                               (readMaybe)
+
+import           Krikit.Agent.Ops.Regen.AutoDisable
+    ( JobStatus (..)
+    , readJobStatus
+    )
 
 -- =============================================================================
 -- Domain types
@@ -79,6 +93,9 @@ data RegenStatus
       -- ^ workspace-sync with failures > 0
     | RegenLogMissing
     | RegenUnparseable !Text
+    | RegenDisabled !Text
+      -- ^ auto-disable marker present; payload is the marker body
+      --   (timestamp + last-known exit code + counter info).
     deriving stock (Eq, Show)
 
 -- | One verify job's outcome.
@@ -88,20 +105,27 @@ data VerifyStatus
     | VerifyErr !Int !Int  -- ^ (errors, warnings)
     | VerifyLogMissing
     | VerifyUnparseable !Text
+    | VerifyDisabled !Text
+      -- ^ auto-disable marker present.
     deriving stock (Eq, Show)
 
--- | One regen job. The @rjLogFile@ is a base name within the
--- log directory.
+-- | One regen job. The @rjLogFile@ is a base name within the log
+-- directory. @rjAutoDisableName@ is the identifier registered with
+-- 'Krikit.Agent.Ops.Regen.AutoDisable.runWithAutoDisable' (i.e.
+-- the @\<name\>@ in @\<name\>.disabled@); 'Nothing' means the job
+-- isn't wrapped (e.g. @workspace-sync@, which is a Python script).
 data RegenJob = RegenJob
-    { rjName    :: !Text
-    , rjLogFile :: !FilePath
+    { rjName             :: !Text
+    , rjLogFile          :: !FilePath
+    , rjAutoDisableName  :: !(Maybe Text)
     }
     deriving stock (Eq, Show)
 
 -- | One verify job. Same shape.
 data VerifyJob = VerifyJob
-    { vjName    :: !Text
-    , vjLogFile :: !FilePath
+    { vjName             :: !Text
+    , vjLogFile          :: !FilePath
+    , vjAutoDisableName  :: !(Maybe Text)
     }
     deriving stock (Eq, Show)
 
@@ -209,9 +233,11 @@ renderRegenLine pairs =
         oks        = filter (isOk        . snd) pairs
         writtens   = filter (isWritten   . snd) pairs
         faileds    = filter (isFailed    . snd) pairs
+        disableds  = filter (isDisabled  . snd) pairs
         nOk        = length oks
         nWritten   = length writtens
         nFailed    = length faileds
+        nDisabled  = length disableds
 
         head_      = "Regen: "
                   <> T.pack (show nOk)
@@ -220,7 +246,8 @@ renderRegenLine pairs =
                   <> " ok"
 
         details
-            | nFailed == 0 && nWritten == 0 = " (all unchanged)"
+            | nFailed == 0 && nWritten == 0 && nDisabled == 0 =
+                " (all unchanged)"
             | otherwise =
                 let writtenPart =
                         if nWritten == 0 then []
@@ -230,10 +257,17 @@ renderRegenLine pairs =
                         if nFailed == 0 then []
                         else [ T.pack (show nFailed) <> " failed: "
                             <> T.intercalate ", " (map (rjName . fst) faileds) ]
-                    parts = failedPart ++ writtenPart
+                    disabledPart =
+                        if nDisabled == 0 then []
+                        else [ T.pack (show nDisabled) <> " disabled: "
+                            <> T.intercalate ", " (map (rjName . fst) disableds) ]
+                    parts = disabledPart ++ failedPart ++ writtenPart
                 in  " (" <> T.intercalate "; " parts <> ")"
     in  head_ <> details
   where
+    -- DISABLED is *not* "ok" -- the regen didn't run. It also
+    -- isn't a strike-bearing failure -- the wrapper exited 0.
+    -- So it lives in its own slot.
     isOk = \case
         RegenOk _       -> True
         RegenSyncOk _ _ -> True
@@ -251,19 +285,25 @@ renderRegenLine pairs =
         RegenUnparseable _ -> True
         _                  -> False
 
+    isDisabled = \case
+        RegenDisabled _ -> True
+        _               -> False
+
 -- | Line 2 -- verify status.
 renderVerifyLine :: [(VerifyJob, VerifyStatus)] -> Text
 renderVerifyLine [] = "Verify: (no jobs)"
 renderVerifyLine pairs =
     let total = length pairs
-        cleans = filter (isClean . snd) pairs
-        warns  = filter (isWarn  . snd) pairs
-        errs   = filter (isErr   . snd) pairs
-        unks   = filter (isUnknown . snd) pairs
-        nClean = length cleans
-        nWarn  = length warns
-        nErr   = length errs
-        nUnk   = length unks
+        cleans   = filter (isClean    . snd) pairs
+        warns    = filter (isWarn     . snd) pairs
+        errs     = filter (isErr      . snd) pairs
+        unks     = filter (isUnknown  . snd) pairs
+        disableds = filter (isDisabled . snd) pairs
+        nClean    = length cleans
+        nWarn     = length warns
+        nErr      = length errs
+        nUnk      = length unks
+        nDisabled = length disableds
 
         allClean = nClean == total
 
@@ -275,14 +315,23 @@ renderVerifyLine pairs =
                         [ T.pack (show nClean) <> " clean" | nClean > 0 ]
                      ++ [ T.pack (show nWarn)  <> " warn"  | nWarn  > 0 ]
                      ++ [ T.pack (show nErr)   <> " err"   | nErr   > 0 ]
+                     ++ [ T.pack (show nDisabled) <> " disabled" | nDisabled > 0 ]
                      ++ [ T.pack (show nUnk)   <> " unknown" | nUnk > 0 ]
                 in  T.intercalate ", " parts
 
-        errSuffix
-            | nErr == 0 = ""
-            | otherwise =
-                " (err: " <> T.intercalate ", " (map (vjName . fst) errs) <> ")"
-    in  "Verify: " <> body <> errSuffix
+        suffixParts =
+            (if nErr > 0
+                then ["err: " <> T.intercalate ", " (map (vjName . fst) errs)]
+                else [])
+            ++ (if nDisabled > 0
+                then ["disabled: " <> T.intercalate ", " (map (vjName . fst) disableds)]
+                else [])
+
+        suffix
+            | null suffixParts = ""
+            | otherwise        =
+                " (" <> T.intercalate "; " suffixParts <> ")"
+    in  "Verify: " <> body <> suffix
   where
     isClean = \case VerifyClean    -> True; _ -> False
     isWarn  = \case VerifyWarn _   -> True; _ -> False
@@ -291,6 +340,9 @@ renderVerifyLine pairs =
         VerifyLogMissing    -> True
         VerifyUnparseable _ -> True
         _                   -> False
+    isDisabled = \case
+        VerifyDisabled _ -> True
+        _                -> False
 
 -- =============================================================================
 -- Effectful orchestrator
@@ -302,20 +354,35 @@ defaultLogDir = "/var/log/krikit/regen"
 
 -- | The default set of regen jobs we summarize. workspace-sync
 -- has a special parser; the rest share the regenerator
--- @WRITTEN\/UNCHANGED\/CREATED\/WRITE-FAIL@ shape.
+-- @WRITTEN\/UNCHANGED\/CREATED\/WRITE-FAIL@ shape. The
+-- 'rjAutoDisableName' values match the labels each binary passes
+-- to 'Krikit.Agent.Ops.Regen.AutoDisable.runWithAutoDisable'.
 defaultRegenJobs :: [RegenJob]
 defaultRegenJobs =
-    [ RegenJob "workspace-sync"            "workspace-sync.log"
-    , RegenJob "system-state-mini"         "regen-system-state-mini.log"
-    , RegenJob "repo-inventory"            "regen-repo-inventory.log"
-    , RegenJob "cross-reference-index"     "regen-cross-reference-index.log"
+    [ RegenJob "workspace-sync"
+        "workspace-sync.log"            Nothing
+    , RegenJob "system-state-mini"
+        "regen-system-state-mini.log"
+        (Just "regen-system-state-mini")
+    , RegenJob "repo-inventory"
+        "regen-repo-inventory.log"
+        (Just "regen-repo-inventory")
+    , RegenJob "cross-reference-index"
+        "regen-cross-reference-index.log"
+        (Just "regen-cross-reference-index")
     ]
 
 defaultVerifyJobs :: [VerifyJob]
 defaultVerifyJobs =
-    [ VerifyJob "reading-order"            "verify-reading-order.log"
-    , VerifyJob "llm-channel"              "verify-llm-channel-consistency.log"
-    , VerifyJob "repo-inventory"           "verify-repo-inventory.log"
+    [ VerifyJob "reading-order"
+        "verify-reading-order.log"
+        (Just "verify-reading-order")
+    , VerifyJob "llm-channel"
+        "verify-llm-channel-consistency.log"
+        (Just "verify-llm-channel-consistency")
+    , VerifyJob "repo-inventory"
+        "verify-repo-inventory.log"
+        (Just "verify-repo-inventory")
     ]
 
 -- | Read every job's log under @logDir@ and produce the rendered
@@ -323,14 +390,26 @@ defaultVerifyJobs =
 -- 'RegenLogMissing' \/ 'RegenUnparseable' (or the verify
 -- equivalents) so the digest still ships -- a missing log is a
 -- visible signal, not a hard failure.
-summarize :: FilePath -> IO Text
-summarize logDir = do
-    rs <- mapM (readRegenJob  logDir) defaultRegenJobs
-    vs <- mapM (readVerifyJob logDir) defaultVerifyJobs
+--
+-- Auto-disable markers under @stateDir@ (see
+-- 'Krikit.Agent.Ops.Regen.AutoDisable') take precedence: a
+-- disabled job's log content is irrelevant, so we surface the
+-- disabled state directly.
+summarize :: FilePath -> FilePath -> IO Text
+summarize logDir stateDir = do
+    rs <- mapM (readRegenJob  logDir stateDir) defaultRegenJobs
+    vs <- mapM (readVerifyJob logDir stateDir) defaultVerifyJobs
     pure (renderSummary rs vs)
 
-readRegenJob :: FilePath -> RegenJob -> IO (RegenJob, RegenStatus)
-readRegenJob logDir job = do
+readRegenJob :: FilePath -> FilePath -> RegenJob -> IO (RegenJob, RegenStatus)
+readRegenJob logDir stateDir job = do
+    disabled <- jobDisabled stateDir (rjAutoDisableName job)
+    case disabled of
+        Just body -> pure (job, RegenDisabled body)
+        Nothing   -> readRegenLog logDir job
+
+readRegenLog :: FilePath -> RegenJob -> IO (RegenJob, RegenStatus)
+readRegenLog logDir job = do
     let path = logDir </> rjLogFile job
     exists <- doesFileExist path
     if not exists
@@ -346,8 +425,16 @@ readRegenJob logDir job = do
                     | otherwise ->
                         pure (job, parseRegenLog body)
 
-readVerifyJob :: FilePath -> VerifyJob -> IO (VerifyJob, VerifyStatus)
-readVerifyJob logDir job = do
+readVerifyJob
+    :: FilePath -> FilePath -> VerifyJob -> IO (VerifyJob, VerifyStatus)
+readVerifyJob logDir stateDir job = do
+    disabled <- jobDisabled stateDir (vjAutoDisableName job)
+    case disabled of
+        Just body -> pure (job, VerifyDisabled body)
+        Nothing   -> readVerifyLog logDir job
+
+readVerifyLog :: FilePath -> VerifyJob -> IO (VerifyJob, VerifyStatus)
+readVerifyLog logDir job = do
     let path = logDir </> vjLogFile job
     exists <- doesFileExist path
     if not exists
@@ -359,6 +446,16 @@ readVerifyJob logDir job = do
                     pure (job, VerifyLogMissing)
                 Right body ->
                     pure (job, parseVerifyLog body)
+
+-- | Resolve a job's auto-disable marker, if any. A 'Nothing'
+-- identifier means the job isn't wrapped (e.g. @workspace-sync@).
+jobDisabled :: FilePath -> Maybe Text -> IO (Maybe Text)
+jobDisabled _        Nothing     = pure Nothing
+jobDisabled stateDir (Just name) = do
+    s <- readJobStatus stateDir name
+    pure $ case s of
+        JobEnabled       -> Nothing
+        JobDisabled body -> Just body
 
 -- =============================================================================
 -- Helpers
@@ -378,4 +475,3 @@ firstNonEmptyLine body =
     case dropWhile T.null (map T.strip (T.lines body)) of
         []      -> ""
         (x : _) -> T.take 80 x  -- cap to avoid huge stderrs in the digest
-

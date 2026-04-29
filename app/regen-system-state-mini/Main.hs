@@ -7,8 +7,17 @@
 --
 -- Idempotent: substantive content unchanged → file untouched (the
 -- "Last generated" timestamp does not by itself trigger a rewrite).
--- Failures (input parse, output write) exit non-zero with a single
--- @FAIL:@ line on stderr.
+--
+-- Exit codes:
+--
+--   * 0 — success (UNCHANGED, WRITTEN, or CREATED)
+--   * 2 — output write failed (hard error; counts toward auto-disable)
+--   * 3 — input failure (config or canonical inputs missing/unparseable)
+--
+-- Wrapped in 'runWithAutoDisable': three consecutive non-zero
+-- exits (>= 2) leave a marker file under
+-- @\/var\/lib\/krikit\/regen\/@ that future runs short-circuit on
+-- until manually cleared.
 --
 -- All paths come from @agent-ops.json@; see
 -- 'Krikit.Agent.Ops.Config'. Override the config location with
@@ -33,21 +42,23 @@ import           Options.Applicative
     , strOption
     , (<**>)
     )
-import           System.Exit                              (exitFailure)
+import           System.Exit                              (ExitCode (..))
 import           System.IO                                (hPutStrLn, stderr)
 
 import           Effectful                                (runEff)
 import           Effectful.Reader.Static                  (runReader)
 
 import           Krikit.Agent.Ops.Config                  (loadConfig)
+import           Krikit.Agent.Ops.Regen.AutoDisable
+    ( defaultStateDir
+    , runWithAutoDisable
+    )
 import           Krikit.Agent.Ops.Regen.Write
     ( WriteOutcome (..)
     , renderOutcome
     )
 import           Krikit.Agent.Ops.SystemStateMini.Run     (regenerate)
 
--- | Single optional override for the agent-ops.json location.
--- Everything else flows from that file.
 newtype Opts = Opts (Maybe FilePath)
 
 optsParser :: Parser Opts
@@ -71,21 +82,24 @@ main = do
             <> progDesc "Regenerate context/system-state-mini.generated.md"
             <> header   "krikit-regen-system-state-mini"
             )
+    runWithAutoDisable "regen-system-state-mini" defaultStateDir
+                       (run override)
 
+run :: Maybe FilePath -> IO ExitCode
+run override = do
     cfgE <- loadConfig override
-    cfg  <- case cfgE of
-        Right c  -> pure c
+    case cfgE of
         Left err -> do
             hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitFailure
-
-    result <- runEff . runReader cfg $ regenerate
-    case result of
-        Left err           -> do
-            hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitFailure
-        Right (path, outcome) -> do
-            TIO.putStrLn (renderOutcome path outcome)
-            case outcome of
-                WriteError _ -> exitFailure
-                _            -> pure ()
+            pure (ExitFailure 3)
+        Right cfg -> do
+            result <- runEff . runReader cfg $ regenerate
+            case result of
+                Left err -> do
+                    hPutStrLn stderr ("FAIL: " <> T.unpack err)
+                    pure (ExitFailure 3)
+                Right (path, outcome) -> do
+                    TIO.putStrLn (renderOutcome path outcome)
+                    case outcome of
+                        WriteError _ -> pure (ExitFailure 2)
+                        _            -> pure ExitSuccess

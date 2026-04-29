@@ -1,8 +1,12 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | @krikit-regen-cross-reference-index@: regenerate the
 -- citation graph at
 -- @krikit-agent-fabric\/context\/cross-reference-index.generated.md@.
+--
+-- Exit codes: 0 success / 2 hard write failure / 3 input failure.
+-- Wrapped in 'runWithAutoDisable' (three-strikes auto-disable).
 --
 -- Inputs come from the same @agent-ops.json@ the other generators
 -- read; override location with @--config@ or
@@ -27,7 +31,7 @@ import           Options.Applicative
     , strOption
     , (<**>)
     )
-import           System.Exit                                          (exitFailure)
+import           System.Exit                                          (ExitCode (..))
 import           System.IO                                            (hPutStrLn, stderr)
 
 import           Effectful                                            (runEff)
@@ -35,6 +39,10 @@ import           Effectful.Reader.Static                              (runReader
 
 import           Krikit.Agent.Ops.Config                              (loadConfig)
 import           Krikit.Agent.Ops.CrossReferenceIndex.Run             (regenerate)
+import           Krikit.Agent.Ops.Regen.AutoDisable
+    ( defaultStateDir
+    , runWithAutoDisable
+    )
 import           Krikit.Agent.Ops.Regen.Write
     ( WriteOutcome (..)
     , renderOutcome
@@ -63,21 +71,24 @@ main = do
             <> progDesc "Regenerate context/cross-reference-index.generated.md"
             <> header   "krikit-regen-cross-reference-index"
             )
+    runWithAutoDisable "regen-cross-reference-index" defaultStateDir
+                       (run override)
 
+run :: Maybe FilePath -> IO ExitCode
+run override = do
     cfgE <- loadConfig override
-    cfg  <- case cfgE of
-        Right c  -> pure c
+    case cfgE of
         Left err -> do
             hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitFailure
-
-    result <- runEff . runReader cfg $ regenerate
-    case result of
-        Left err              -> do
-            hPutStrLn stderr ("FAIL: " <> T.unpack err)
-            exitFailure
-        Right (path, outcome) -> do
-            TIO.putStrLn (renderOutcome path outcome)
-            case outcome of
-                WriteError _ -> exitFailure
-                _            -> pure ()
+            pure (ExitFailure 3)
+        Right cfg -> do
+            result <- runEff . runReader cfg $ regenerate
+            case result of
+                Left err -> do
+                    hPutStrLn stderr ("FAIL: " <> T.unpack err)
+                    pure (ExitFailure 3)
+                Right (path, outcome) -> do
+                    TIO.putStrLn (renderOutcome path outcome)
+                    case outcome of
+                        WriteError _ -> pure (ExitFailure 2)
+                        _            -> pure ExitSuccess
