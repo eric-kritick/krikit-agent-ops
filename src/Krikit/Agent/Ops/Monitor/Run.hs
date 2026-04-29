@@ -25,6 +25,7 @@ module Krikit.Agent.Ops.Monitor.Run
     ( -- * Configuration
       RunConfig (..)
     , defaultRunConfig
+    , runConfigFromEnv
 
       -- * Orchestrator
     , runOnce
@@ -47,6 +48,9 @@ import           System.Exit                      (ExitCode (..))
 import qualified System.Process.Typed             as TP
 
 import           Effectful                        (Eff, IOE, liftIO, (:>))
+
+import           System.Environment                (lookupEnv)
+import           Text.Read                         (readMaybe)
 
 import           Krikit.Agent.Ops.Effect.Telegram (Telegram, sendMessage)
 import           Krikit.Agent.Ops.Monitor.Check   (runAllChecks)
@@ -92,6 +96,35 @@ defaultRunConfig = RunConfig
     , rcUpdateStatusBin = Just "/usr/local/bin/krikit/krikit-update-status"
     , rcHostName        = "krikit-agent-001"
     }
+
+-- | Build a 'RunConfig' from 'defaultRunConfig' overlaid with
+-- env-var overrides. Recognized variables:
+--
+--   * @KRIKIT_MONITOR_HOST_NAME@   -- digest header host name
+--   * @KRIKIT_MONITOR_DIGEST_HOUR@ -- 0..23, local time
+--
+-- Empty / missing / unparseable values fall through to the
+-- default. Sourced from @\/Users\/agentops\/.config\/channels.env@
+-- by the wrapper script.
+runConfigFromEnv :: IO RunConfig
+runConfigFromEnv = do
+    mHost <- lookupEnv "KRIKIT_MONITOR_HOST_NAME"
+    mHour <- lookupEnv "KRIKIT_MONITOR_DIGEST_HOUR"
+    let base = defaultRunConfig
+        host = case nonEmpty mHost of
+            Just s  -> T.pack s
+            Nothing -> rcHostName base
+        sched = case nonEmpty mHour >>= readMaybe of
+            Just h | 0 <= h && h <= 23 ->
+                (rcDigestSchedule base) { dsHourLocal = h }
+            _ -> rcDigestSchedule base
+    pure base
+        { rcHostName       = host
+        , rcDigestSchedule = sched
+        }
+  where
+    nonEmpty (Just s) | not (null s) = Just s
+    nonEmpty _                       = Nothing
 
 -- =============================================================================
 -- Orchestrator

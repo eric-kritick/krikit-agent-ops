@@ -43,7 +43,7 @@ import           Krikit.Agent.Ops.Effect.Telegram
     )
 import           Krikit.Agent.Ops.Monitor.Run
     ( RunConfig (..)
-    , defaultRunConfig
+    , runConfigFromEnv
     , runOnce
     )
 
@@ -88,19 +88,20 @@ main = do
                         \launchd-driven 5-min cron"
             <> header   "krikit-monitor")
 
-    let cfg = defaultRunConfig
+    -- Start from env-var-resolved defaults (host name, digest
+    -- hour), then layer per-flag CLI overrides on top.
+    base <- runConfigFromEnv
+    let cfg = base
                 { rcStatePath       =
-                    case optStatePath opts of
-                        Just p  -> p
-                        Nothing -> rcStatePath defaultRunConfig
+                    maybe (rcStatePath base) id (optStatePath opts)
                 , rcRegenSummaryBin =
                     case optRegenSummaryBin opts of
                         Just _  -> optRegenSummaryBin opts
-                        Nothing -> rcRegenSummaryBin defaultRunConfig
+                        Nothing -> rcRegenSummaryBin base
                 , rcUpdateStatusBin =
                     case optUpdateStatusBin opts of
                         Just _  -> optUpdateStatusBin opts
-                        Nothing -> rcUpdateStatusBin defaultRunConfig
+                        Nothing -> rcUpdateStatusBin base
                 }
 
     creds <- botCredsFromEnv

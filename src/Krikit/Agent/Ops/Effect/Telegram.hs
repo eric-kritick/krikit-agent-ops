@@ -27,6 +27,8 @@ module Krikit.Agent.Ops.Effect.Telegram
     , BotToken (..)
     , ChatId (..)
     , MessageId (..)
+    , ApiBaseUrl (..)
+    , defaultApiBaseUrl
     , BotCreds (..)
     , TelegramError (..)
 
@@ -89,10 +91,24 @@ newtype ChatId = ChatId { unChatId :: Text }
 newtype MessageId = MessageId { unMessageId :: Int }
     deriving stock (Eq, Show)
 
+-- | The base URL of the Bot API. Default is
+-- @https:\/\/api.telegram.org@; override via the
+-- @TELEGRAM_API_BASE_URL@ env var (e.g. for a self-hosted Bot
+-- API server, a regional relay, or a test mock). The path
+-- (@\/bot\<token\>\/sendMessage@) is appended in code -- those
+-- segments are protocol-level, not host-level.
+newtype ApiBaseUrl = ApiBaseUrl { unApiBaseUrl :: Text }
+    deriving stock (Eq, Show)
+
+-- | The default Telegram Bot API origin.
+defaultApiBaseUrl :: ApiBaseUrl
+defaultApiBaseUrl = ApiBaseUrl "https://api.telegram.org"
+
 -- | What the IO handler needs to make API calls.
 data BotCreds = BotCreds
-    { bcToken  :: !BotToken
-    , bcChatId :: !ChatId
+    { bcToken     :: !BotToken
+    , bcChatId    :: !ChatId
+    , bcApiBase   :: !ApiBaseUrl
     }
     deriving stock (Eq, Show)
 
@@ -146,7 +162,7 @@ runTelegramIO mgr mcreds = interpret $ \_ -> \case
 -- | One actual API call.
 performSend :: Manager -> BotCreds -> Text -> IO (Either TelegramError MessageId)
 performSend mgr creds text = do
-    let url = sendMessageUrl (bcToken creds)
+    let url = sendMessageUrl (bcApiBase creds) (bcToken creds)
     result <- try @SomeException $ do
         base <- HC.parseRequest url
         let req = HC.urlEncodedBody
@@ -166,9 +182,9 @@ performSend mgr creds text = do
                     else pure (Left (TelegramApi statusCode
                                        (extractDescription bodyTxt)))
 
-sendMessageUrl :: BotToken -> String
-sendMessageUrl (BotToken t) =
-    "https://api.telegram.org/bot" <> T.unpack t <> "/sendMessage"
+sendMessageUrl :: ApiBaseUrl -> BotToken -> String
+sendMessageUrl (ApiBaseUrl base) (BotToken t) =
+    T.unpack base <> "/bot" <> T.unpack t <> "/sendMessage"
 
 -- | Pull @result.message_id@ out of a successful Bot API response.
 -- The shape is @{"ok": true, "result": {"message_id": N, ...}}@.
@@ -227,25 +243,33 @@ runTelegramCapture ref = interpret $ \_ -> \case
 -- Bootstrap helpers
 -- =============================================================================
 
--- | Read 'BotCreds' from the canonical env-var pair set by the
+-- | Read 'BotCreds' from the canonical env-var set by the
 -- @channels.env@ wrapper:
 --
---   * @TELEGRAM_BOT_TOKEN@
---   * @TELEGRAM_ALERT_CHAT_ID@
+--   * @TELEGRAM_BOT_TOKEN@        -- required
+--   * @TELEGRAM_ALERT_CHAT_ID@    -- required
+--   * @TELEGRAM_API_BASE_URL@     -- optional; defaults to
+--                                   'defaultApiBaseUrl'
+--                                   (@https:\/\/api.telegram.org@).
 --
--- Returns 'Nothing' when either variable is unset or empty;
--- 'runTelegramIO' propagates this as 'TelegramMissingCreds' so
--- the operator sees a clear log line.
+-- Returns 'Nothing' when either required variable is unset or
+-- empty; 'runTelegramIO' propagates this as
+-- 'TelegramMissingCreds' so the operator sees a clear log line.
 botCredsFromEnv :: IO (Maybe BotCreds)
 botCredsFromEnv = do
     mtok  <- lookupEnv "TELEGRAM_BOT_TOKEN"
     mchat <- lookupEnv "TELEGRAM_ALERT_CHAT_ID"
+    mbase <- lookupEnv "TELEGRAM_API_BASE_URL"
     pure $ do
         tok  <- nonEmpty mtok
         chat <- nonEmpty mchat
+        let base = maybe defaultApiBaseUrl
+                         (ApiBaseUrl . T.pack)
+                         (nonEmpty mbase)
         pure BotCreds
-            { bcToken  = BotToken (T.pack tok)
-            , bcChatId = ChatId   (T.pack chat)
+            { bcToken   = BotToken (T.pack tok)
+            , bcChatId  = ChatId   (T.pack chat)
+            , bcApiBase = base
             }
   where
     nonEmpty (Just s) | not (null s) = Just s
