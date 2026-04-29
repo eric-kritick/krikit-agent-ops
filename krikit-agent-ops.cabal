@@ -39,6 +39,7 @@ common deps
         , http-client         ^>=0.7
         , http-client-tls     ^>=0.3
         , http-types          ^>=0.12
+        , network             >=3.1  && <3.3
         , time                >=1.12 && <1.15
         , typed-process       ^>=0.2
 
@@ -64,6 +65,11 @@ library
         Krikit.Agent.Ops.UpdateStatus.Report
         Krikit.Agent.Ops.UpdateStatus.Run
         Krikit.Agent.Ops.CrossReferenceIndex.Run
+        Krikit.Agent.Ops.Effect.Telegram
+        Krikit.Agent.Ops.Monitor.Check
+        Krikit.Agent.Ops.Monitor.Digest
+        Krikit.Agent.Ops.Monitor.Run
+        Krikit.Agent.Ops.Monitor.State
         Krikit.Agent.Ops.Regen.Banner
         Krikit.Agent.Ops.Regen.FsWalk
         Krikit.Agent.Ops.Regen.MarkdownExtract
@@ -213,6 +219,19 @@ executable krikit-regen-summary
         , text                 ^>=2.1
     default-language: GHC2021
 
+executable krikit-monitor
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/krikit-monitor
+    build-depends:
+        , base                 ^>=4.22
+        , effectful            ^>=2.6
+        , http-client          ^>=0.7
+        , http-client-tls      ^>=0.3
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+    default-language: GHC2021
+
 executable krikit-verify-repo-inventory
     import:           warnings
     main-is:          Main.hs
@@ -257,6 +276,10 @@ test-suite krikit-agent-ops-test
     other-modules:
         Krikit.Agent.Ops.ConfigSpec
         Krikit.Agent.Ops.CrossReferenceIndex.RunSpec
+        Krikit.Agent.Ops.Effect.TelegramSpec
+        Krikit.Agent.Ops.Monitor.CheckSpec
+        Krikit.Agent.Ops.Monitor.DigestSpec
+        Krikit.Agent.Ops.Monitor.StateSpec
         Krikit.Agent.Ops.Regen.MarkdownExtractSpec
         Krikit.Agent.Ops.Regen.WriteSpec
         Krikit.Agent.Ops.RegenSummary.RunSpec

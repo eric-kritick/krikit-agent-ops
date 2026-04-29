@@ -2,6 +2,10 @@ module Main (main) where
 
 import qualified Krikit.Agent.Ops.ConfigSpec
 import qualified Krikit.Agent.Ops.CrossReferenceIndex.RunSpec
+import qualified Krikit.Agent.Ops.Effect.TelegramSpec
+import qualified Krikit.Agent.Ops.Monitor.CheckSpec
+import qualified Krikit.Agent.Ops.Monitor.DigestSpec
+import qualified Krikit.Agent.Ops.Monitor.StateSpec
 import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RegenSummary.RunSpec
@@ -29,6 +33,10 @@ main = hspec $ do
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec
     Krikit.Agent.Ops.ConfigSpec.spec
     Krikit.Agent.Ops.RegenSummary.RunSpec.spec
+    Krikit.Agent.Ops.Effect.TelegramSpec.spec
+    Krikit.Agent.Ops.Monitor.CheckSpec.spec
+    Krikit.Agent.Ops.Monitor.StateSpec.spec
+    Krikit.Agent.Ops.Monitor.DigestSpec.spec
     Krikit.Agent.Ops.CrossReferenceIndex.RunSpec.spec
     Krikit.Agent.Ops.Verify.CommonSpec.spec
     Krikit.Agent.Ops.Verify.LlmChannelConsistencySpec.spec
