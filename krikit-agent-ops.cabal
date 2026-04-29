@@ -68,6 +68,7 @@ library
         Krikit.Agent.Ops.Regen.FsWalk
         Krikit.Agent.Ops.Regen.MarkdownExtract
         Krikit.Agent.Ops.Regen.Write
+        Krikit.Agent.Ops.RegenSummary.Run
         Krikit.Agent.Ops.RepoInventory.Run
         Krikit.Agent.Ops.SystemStateMini.Run
         Krikit.Agent.Ops.Update.Run
@@ -201,6 +202,17 @@ executable krikit-regen-cross-reference-index
         , text                 ^>=2.1
     default-language: GHC2021
 
+executable krikit-regen-summary
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app/regen-summary
+    build-depends:
+        , base                 ^>=4.22
+        , krikit-agent-ops
+        , optparse-applicative ^>=0.19
+        , text                 ^>=2.1
+    default-language: GHC2021
+
 executable krikit-verify-repo-inventory
     import:           warnings
     main-is:          Main.hs
@@ -247,6 +259,7 @@ test-suite krikit-agent-ops-test
         Krikit.Agent.Ops.CrossReferenceIndex.RunSpec
         Krikit.Agent.Ops.Regen.MarkdownExtractSpec
         Krikit.Agent.Ops.Regen.WriteSpec
+        Krikit.Agent.Ops.RegenSummary.RunSpec
         Krikit.Agent.Ops.RepoInventory.RunSpec
         Krikit.Agent.Ops.Verify.CommonSpec
         Krikit.Agent.Ops.Verify.LlmChannelConsistencySpec

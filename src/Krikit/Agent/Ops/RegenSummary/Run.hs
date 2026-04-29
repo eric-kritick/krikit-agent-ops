@@ -1,0 +1,381 @@
+{-# LANGUAGE DerivingStrategies  #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
+-- | @krikit-regen-summary@: produce a two-line summary of last
+-- night's regen + verify chain status, suitable for inclusion in
+-- the daily Telegram digest (PB 10).
+--
+-- Reads the per-job log files under
+-- @\/var\/log\/krikit\/regen\/@. Output:
+--
+-- @
+-- Regen: 4\/4 ok (1 written: repo-inventory)
+-- Verify: 2 clean, 1 warn (llm-channel)
+-- @
+--
+-- Or, when nothing's notable:
+--
+-- @
+-- Regen: 4\/4 ok (all unchanged)
+-- Verify: 3\/3 clean
+-- @
+--
+-- Pure parsing + rendering live here; the orchestrator just
+-- reads files and dispatches.
+module Krikit.Agent.Ops.RegenSummary.Run
+    ( -- * Domain types
+      RegenChange (..)
+    , RegenStatus (..)
+    , VerifyStatus (..)
+    , RegenJob (..)
+    , VerifyJob (..)
+
+      -- * Pure parsers
+    , parseRegenLog
+    , parseVerifyLog
+    , parseWorkspaceSyncLog
+
+      -- * Pure rendering
+    , renderSummary
+    , renderRegenLine
+    , renderVerifyLine
+
+      -- * Effectful orchestrator
+    , summarize
+    , defaultLogDir
+    , defaultRegenJobs
+    , defaultVerifyJobs
+    ) where
+
+import           Control.Exception   (IOException, try)
+import           Data.Maybe          (mapMaybe)
+import           Data.Text           (Text)
+import qualified Data.Text           as T
+import qualified Data.Text.IO        as TIO
+import           System.Directory    (doesFileExist)
+import           System.FilePath     ((</>))
+import           Text.Read           (readMaybe)
+
+-- =============================================================================
+-- Domain types
+-- =============================================================================
+
+-- | What happened to the file a regen job writes.
+data RegenChange
+    = Unchanged       -- ^ existing content matched; file untouched
+    | Written         -- ^ existing content differed; rewritten
+    | Created         -- ^ file did not exist; first-time write
+    deriving stock (Eq, Show)
+
+-- | One regen job's outcome. @RegenOk@ also captures
+-- workspace-sync's @(ok, failed)@ pair when that's relevant.
+data RegenStatus
+    = RegenOk RegenChange
+    | RegenWriteFail !Text
+    | RegenSyncOk !Int !Int  -- ^ workspace-sync: (ok-count, failed-count)
+    | RegenSyncFail !Int !Int
+      -- ^ workspace-sync with failures > 0
+    | RegenLogMissing
+    | RegenUnparseable !Text
+    deriving stock (Eq, Show)
+
+-- | One verify job's outcome.
+data VerifyStatus
+    = VerifyClean
+    | VerifyWarn !Int
+    | VerifyErr !Int !Int  -- ^ (errors, warnings)
+    | VerifyLogMissing
+    | VerifyUnparseable !Text
+    deriving stock (Eq, Show)
+
+-- | One regen job. The @rjLogFile@ is a base name within the
+-- log directory.
+data RegenJob = RegenJob
+    { rjName    :: !Text
+    , rjLogFile :: !FilePath
+    }
+    deriving stock (Eq, Show)
+
+-- | One verify job. Same shape.
+data VerifyJob = VerifyJob
+    { vjName    :: !Text
+    , vjLogFile :: !FilePath
+    }
+    deriving stock (Eq, Show)
+
+-- =============================================================================
+-- Pure parsers
+-- =============================================================================
+
+-- | Parse a regen-binary's log. The binary's last meaningful
+-- line is one of @Created@\/@Written@\/@Unchanged@\/@WriteError@
+-- per 'Krikit.Agent.Ops.Regen.Write.renderOutcome'. We look for
+-- those tokens line-by-line, taking the last hit (in case the
+-- log accumulated across multiple cron runs without rotation).
+parseRegenLog :: Text -> RegenStatus
+parseRegenLog body =
+    case lastMatching match (T.lines body) of
+        Just s  -> s
+        Nothing -> RegenUnparseable (firstNonEmptyLine body)
+  where
+    match :: Text -> Maybe RegenStatus
+    match line =
+        let s = T.stripStart line
+        in  if      "CREATED:"    `T.isPrefixOf` s then Just (RegenOk Created)
+            else if "WRITTEN:"    `T.isPrefixOf` s then Just (RegenOk Written)
+            else if "UNCHANGED:"  `T.isPrefixOf` s then Just (RegenOk Unchanged)
+            else if "WRITE-FAIL:" `T.isPrefixOf` s
+                then Just (RegenWriteFail (T.strip (T.drop (T.length "WRITE-FAIL:") s)))
+            else Nothing
+
+-- | Parse @workspace_sync.py@'s JSON-lines log. We pick out the
+-- final @{"event":"summary",...}@ line and read @ok@ \/ @failed@
+-- counts. JSON parsing is intentionally crude (substring grabs)
+-- so we don't add an aeson dep just for two integers.
+parseWorkspaceSyncLog :: Text -> RegenStatus
+parseWorkspaceSyncLog body =
+    case lastMatching summaryLine (T.lines body) of
+        Just s  -> s
+        Nothing -> RegenUnparseable (firstNonEmptyLine body)
+  where
+    summaryLine :: Text -> Maybe RegenStatus
+    summaryLine line
+        | not ("\"event\":\"summary\"" `T.isInfixOf` line) = Nothing
+        | otherwise =
+            case (extractInt "\"ok\":" line, extractInt "\"failed\":" line) of
+                (Just ok, Just fl)
+                    | fl > 0    -> Just (RegenSyncFail ok fl)
+                    | otherwise -> Just (RegenSyncOk ok fl)
+                _               -> Just (RegenUnparseable line)
+
+    extractInt :: Text -> Text -> Maybe Int
+    extractInt key line =
+        case T.breakOn key line of
+            (_, rest) | T.null rest -> Nothing
+            (_, rest) ->
+                let after = T.drop (T.length key) rest
+                    digits = T.takeWhile (\c -> c >= '0' && c <= '9') after
+                in  if T.null digits then Nothing
+                    else readMaybe (T.unpack digits)
+
+-- | Parse a verify binary's log. The binary emits one
+-- @Summary: N findings (E errors, W warnings).@ footer per
+-- 'Krikit.Agent.Ops.Verify.Common.renderFindings'.
+parseVerifyLog :: Text -> VerifyStatus
+parseVerifyLog body =
+    case lastMatching summary (T.lines body) of
+        Just s  -> s
+        Nothing -> VerifyUnparseable (firstNonEmptyLine body)
+  where
+    summary :: Text -> Maybe VerifyStatus
+    summary line
+        | not ("Summary:" `T.isPrefixOf` T.stripStart line) = Nothing
+        | otherwise =
+            case (extractInt "errors" line, extractInt "warnings" line) of
+                (Just e, Just w)
+                    | e > 0  -> Just (VerifyErr e w)
+                    | w > 0  -> Just (VerifyWarn w)
+                    | otherwise -> Just VerifyClean
+                _ -> Just (VerifyUnparseable line)
+
+    -- "(N errors" / "M warnings" are the canonical shapes.
+    extractInt :: Text -> Text -> Maybe Int
+    extractInt suffix line =
+        case T.breakOn suffix line of
+            (_, rest) | T.null rest -> Nothing
+            (before, _) ->
+                -- read trailing digits from the part before the keyword
+                let trimmed = T.dropWhileEnd (== ' ') before
+                    revDigs = T.takeWhileEnd (\c -> c >= '0' && c <= '9') trimmed
+                in  if T.null revDigs then Nothing
+                    else readMaybe (T.unpack revDigs)
+
+-- =============================================================================
+-- Pure rendering
+-- =============================================================================
+
+-- | Render the full two-line summary.
+renderSummary :: [(RegenJob, RegenStatus)] -> [(VerifyJob, VerifyStatus)] -> Text
+renderSummary regens verifies =
+    renderRegenLine regens <> "\n" <> renderVerifyLine verifies
+
+-- | Line 1 -- regen status.
+renderRegenLine :: [(RegenJob, RegenStatus)] -> Text
+renderRegenLine [] = "Regen: (no jobs)"
+renderRegenLine pairs =
+    let total      = length pairs
+        oks        = filter (isOk        . snd) pairs
+        writtens   = filter (isWritten   . snd) pairs
+        faileds    = filter (isFailed    . snd) pairs
+        nOk        = length oks
+        nWritten   = length writtens
+        nFailed    = length faileds
+
+        head_      = "Regen: "
+                  <> T.pack (show nOk)
+                  <> "/"
+                  <> T.pack (show total)
+                  <> " ok"
+
+        details
+            | nFailed == 0 && nWritten == 0 = " (all unchanged)"
+            | otherwise =
+                let writtenPart =
+                        if nWritten == 0 then []
+                        else [ T.pack (show nWritten) <> " written: "
+                            <> T.intercalate ", " (map (rjName . fst) writtens) ]
+                    failedPart =
+                        if nFailed == 0 then []
+                        else [ T.pack (show nFailed) <> " failed: "
+                            <> T.intercalate ", " (map (rjName . fst) faileds) ]
+                    parts = failedPart ++ writtenPart
+                in  " (" <> T.intercalate "; " parts <> ")"
+    in  head_ <> details
+  where
+    isOk = \case
+        RegenOk _       -> True
+        RegenSyncOk _ _ -> True
+        _               -> False
+
+    isWritten = \case
+        RegenOk Written  -> True
+        RegenOk Created  -> True
+        _                -> False
+
+    isFailed = \case
+        RegenWriteFail _   -> True
+        RegenSyncFail _ _  -> True
+        RegenLogMissing    -> True
+        RegenUnparseable _ -> True
+        _                  -> False
+
+-- | Line 2 -- verify status.
+renderVerifyLine :: [(VerifyJob, VerifyStatus)] -> Text
+renderVerifyLine [] = "Verify: (no jobs)"
+renderVerifyLine pairs =
+    let total = length pairs
+        cleans = filter (isClean . snd) pairs
+        warns  = filter (isWarn  . snd) pairs
+        errs   = filter (isErr   . snd) pairs
+        unks   = filter (isUnknown . snd) pairs
+        nClean = length cleans
+        nWarn  = length warns
+        nErr   = length errs
+        nUnk   = length unks
+
+        allClean = nClean == total
+
+        body
+            | allClean =
+                T.pack (show nClean) <> "/" <> T.pack (show total) <> " clean"
+            | otherwise =
+                let parts =
+                        [ T.pack (show nClean) <> " clean" | nClean > 0 ]
+                     ++ [ T.pack (show nWarn)  <> " warn"  | nWarn  > 0 ]
+                     ++ [ T.pack (show nErr)   <> " err"   | nErr   > 0 ]
+                     ++ [ T.pack (show nUnk)   <> " unknown" | nUnk > 0 ]
+                in  T.intercalate ", " parts
+
+        errSuffix
+            | nErr == 0 = ""
+            | otherwise =
+                " (err: " <> T.intercalate ", " (map (vjName . fst) errs) <> ")"
+    in  "Verify: " <> body <> errSuffix
+  where
+    isClean = \case VerifyClean    -> True; _ -> False
+    isWarn  = \case VerifyWarn _   -> True; _ -> False
+    isErr   = \case VerifyErr _ _  -> True; _ -> False
+    isUnknown = \case
+        VerifyLogMissing    -> True
+        VerifyUnparseable _ -> True
+        _                   -> False
+
+-- =============================================================================
+-- Effectful orchestrator
+-- =============================================================================
+
+-- | Default log directory on the mini.
+defaultLogDir :: FilePath
+defaultLogDir = "/var/log/krikit/regen"
+
+-- | The default set of regen jobs we summarize. workspace-sync
+-- has a special parser; the rest share the regenerator
+-- @WRITTEN\/UNCHANGED\/CREATED\/WRITE-FAIL@ shape.
+defaultRegenJobs :: [RegenJob]
+defaultRegenJobs =
+    [ RegenJob "workspace-sync"            "workspace-sync.log"
+    , RegenJob "system-state-mini"         "regen-system-state-mini.log"
+    , RegenJob "repo-inventory"            "regen-repo-inventory.log"
+    , RegenJob "cross-reference-index"     "regen-cross-reference-index.log"
+    ]
+
+defaultVerifyJobs :: [VerifyJob]
+defaultVerifyJobs =
+    [ VerifyJob "reading-order"            "verify-reading-order.log"
+    , VerifyJob "llm-channel"              "verify-llm-channel-consistency.log"
+    , VerifyJob "repo-inventory"           "verify-repo-inventory.log"
+    ]
+
+-- | Read every job's log under @logDir@ and produce the rendered
+-- two-line summary. Missing or unparseable logs become
+-- 'RegenLogMissing' \/ 'RegenUnparseable' (or the verify
+-- equivalents) so the digest still ships -- a missing log is a
+-- visible signal, not a hard failure.
+summarize :: FilePath -> IO Text
+summarize logDir = do
+    rs <- mapM (readRegenJob  logDir) defaultRegenJobs
+    vs <- mapM (readVerifyJob logDir) defaultVerifyJobs
+    pure (renderSummary rs vs)
+
+readRegenJob :: FilePath -> RegenJob -> IO (RegenJob, RegenStatus)
+readRegenJob logDir job = do
+    let path = logDir </> rjLogFile job
+    exists <- doesFileExist path
+    if not exists
+        then pure (job, RegenLogMissing)
+        else do
+            r <- try (TIO.readFile path)
+            case r of
+                Left (_ :: IOException) ->
+                    pure (job, RegenLogMissing)
+                Right body
+                    | rjName job == "workspace-sync" ->
+                        pure (job, parseWorkspaceSyncLog body)
+                    | otherwise ->
+                        pure (job, parseRegenLog body)
+
+readVerifyJob :: FilePath -> VerifyJob -> IO (VerifyJob, VerifyStatus)
+readVerifyJob logDir job = do
+    let path = logDir </> vjLogFile job
+    exists <- doesFileExist path
+    if not exists
+        then pure (job, VerifyLogMissing)
+        else do
+            r <- try (TIO.readFile path)
+            case r of
+                Left (_ :: IOException) ->
+                    pure (job, VerifyLogMissing)
+                Right body ->
+                    pure (job, parseVerifyLog body)
+
+-- =============================================================================
+-- Helpers
+-- =============================================================================
+
+-- | Find the *last* element for which the predicate yields
+-- 'Just'. We want the latest matching log line in case the file
+-- accumulated multiple cron runs without rotation.
+lastMatching :: (a -> Maybe b) -> [a] -> Maybe b
+lastMatching p xs =
+    case mapMaybe p xs of
+        []  -> Nothing
+        ys  -> Just (last ys)
+
+firstNonEmptyLine :: Text -> Text
+firstNonEmptyLine body =
+    case dropWhile T.null (map T.strip (T.lines body)) of
+        []      -> ""
+        (x : _) -> T.take 80 x  -- cap to avoid huge stderrs in the digest
+
