@@ -561,17 +561,25 @@ purescriptIdentifiersRepos =
 -- =============================================================================
 
 -- | Filter rules read from @kritick-ecosystem\/config\/ecosystem.json@.
--- Two fields the generator respects:
+-- Three fields the generator + verifier respect:
 --
---   * @ignore@ -- exact repo names to drop entirely.
---   * @skip_repo_prefixes@ -- prefixes to drop entirely.
+--   * @ignore@ -- exact repo names to drop entirely (regen + verify).
+--   * @skip_repo_prefixes@ -- prefixes to drop entirely (regen +
+--     verify).
+--   * @auto_roots.exclude_repos@ -- @kritick-*@ repos that *are*
+--     part of the ecosystem but are intentionally NOT auto-roots
+--     (e.g., @kritick-ecosystem@ is the meta-repo, not an app /
+--     service). The repo-inventory verifier subtracts these from
+--     the on-disk side before comparing to
+--     @ecosystem-roots.generated.md@; the regen does NOT
+--     (these repos still belong in the agent-facing inventory).
 --
--- Same semantics as @ecosystem_scan.py@ (lines 693, 710-711): a
--- repo in either set is stripped from the scan before any roots /
--- graph / inventory processing.
+-- Matches @ecosystem_scan.py@ semantics: lines 693, 710-711 for the
+-- first two fields; line 701 for @auto_roots.exclude_repos@.
 data EcosystemFilter = EcosystemFilter
     { efIgnoreNames    :: !(Set Text)
     , efIgnorePrefixes :: ![Text]
+    , efRootExceptions :: !(Set Text)
     }
     deriving stock (Eq, Show)
 
@@ -579,9 +587,14 @@ instance FromJSON EcosystemFilter where
     parseJSON = A.withObject "EcosystemConfig" $ \o -> do
         ignores  <- fromMaybe [] <$> o .:? "ignore"
         prefixes <- fromMaybe [] <$> o .:? "skip_repo_prefixes"
+        autoO    <- fromMaybe (A.Object mempty) <$> o .:? "auto_roots"
+        rootEx   <- A.withObject "auto_roots"
+                        (\ar -> fromMaybe [] <$> ar .:? "exclude_repos")
+                        autoO
         pure EcosystemFilter
             { efIgnoreNames    = Set.fromList ignores
             , efIgnorePrefixes = prefixes
+            , efRootExceptions = Set.fromList rootEx
             }
 
 readEcosystemFilter :: FilePath -> IO (Either Text EcosystemFilter)

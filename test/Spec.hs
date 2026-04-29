@@ -4,6 +4,8 @@ import qualified Krikit.Agent.Ops.ConfigSpec
 import qualified Krikit.Agent.Ops.Regen.MarkdownExtractSpec
 import qualified Krikit.Agent.Ops.Regen.WriteSpec
 import qualified Krikit.Agent.Ops.RepoInventory.RunSpec
+import qualified Krikit.Agent.Ops.Verify.CommonSpec
+import qualified Krikit.Agent.Ops.Verify.RepoInventorySpec
 import qualified Krikit.Agent.Ops.Smoke.RunSpec
 import qualified Krikit.Agent.Ops.Smoke.TierSpec
 import qualified Krikit.Agent.Ops.UpdateStatus.MacOSSpec
@@ -22,3 +24,5 @@ main = hspec $ do
     Krikit.Agent.Ops.Regen.WriteSpec.spec
     Krikit.Agent.Ops.RepoInventory.RunSpec.spec
     Krikit.Agent.Ops.ConfigSpec.spec
+    Krikit.Agent.Ops.Verify.CommonSpec.spec
+    Krikit.Agent.Ops.Verify.RepoInventorySpec.spec

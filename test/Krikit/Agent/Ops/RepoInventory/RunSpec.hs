@@ -224,6 +224,7 @@ spec = do
         let f = EcosystemFilter
                   { efIgnoreNames    = Set.fromList ["docker", "rn-test"]
                   , efIgnorePrefixes = ["deprecated--"]
+                  , efRootExceptions = Set.empty
                   }
 
         it "drops repos by exact name" $
