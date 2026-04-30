@@ -30,16 +30,48 @@ install:
                   --install-method copy \
                   --overwrite-policy=always
 
-# Same as `install`, plus mirror krikit-update-status to a system path
-# readable by all users. Needed on the mini because monitor.py runs as
-# agentops and invokes krikit-update-status from the daily digest --
-# /Users/opsadmin/.local/bin/ may not be traversable by agentops on
-# hardened hosts.
-install-system: install
+# Why mirror at all: agentops's launchd context can't traverse
+# opsadmin's home (mode 700), so binaries living at
+# `/Users/opsadmin/.local/bin/` are unreachable from the
+# `ai.krikit.*` daemons. The system-path mirror is root-owned and
+# world-traversable, so every daemon (regardless of UserName) can
+# exec from there.
+#
+# Mirrored set covers the 9 launchd-driven binaries: `krikit-monitor`
+# (runs as agentops), `krikit-update-status` + `krikit-regen-summary`
+# (invoked from monitor's digest path), and the 6 regen + verify
+# daemons (PB 6 / PB 26; run as opsadmin but exec from the same
+# system path so the wrapper set is uniform).
+#
+# Opsadmin-only tools (krikit-{health,restart,smoke,summary,update,
+# versions}) are deliberately NOT mirrored -- they're operator
+# CLIs, run from opsadmin's PATH, and don't need a system home.
+#
+# Same as `install`, plus mirror every launchd-driven binary to /usr/local/bin/krikit/. Use on the mini.
+install-system: install _mirror-system
+
+# (private) Mirror every launchd-driven binary from `~/.local/bin/`
+# to `/usr/local/bin/krikit/`. Idempotent. Used by `install-system`
+# and `update-system`.
+_mirror-system:
+    #!/usr/bin/env bash
+    set -euo pipefail
     sudo install -d /usr/local/bin/krikit
-    sudo install -m 755 \
-        "{{env_var('HOME')}}/.local/bin/krikit-update-status" \
-        /usr/local/bin/krikit/krikit-update-status
+    for bin in \
+        krikit-monitor \
+        krikit-update-status \
+        krikit-regen-summary \
+        krikit-regen-system-state-mini \
+        krikit-regen-repo-inventory \
+        krikit-regen-cross-reference-index \
+        krikit-verify-reading-order \
+        krikit-verify-llm-channel-consistency \
+        krikit-verify-repo-inventory \
+    ; do
+        sudo install -m 755 \
+            "${HOME}/.local/bin/${bin}" \
+            "/usr/local/bin/krikit/${bin}"
+    done
 
 # Delete all build artifacts.
 clean:
@@ -65,12 +97,12 @@ update:
 # Same as `update` but skip the `git pull` (useful after local edits).
 rebuild: build install
 
-# Same as `update` but also mirrors update-status to /usr/local/bin/krikit/.
-# Use this on the mini after pulling a change to the update-status binary.
-update-system: update
-    sudo install -m 755 \
-        "{{env_var('HOME')}}/.local/bin/krikit-update-status" \
-        /usr/local/bin/krikit/krikit-update-status
+# Use this on the mini -- it's the canonical "pull the latest
+# agent-ops chain and put it where launchd can run it" recipe.
+# See `install-system` above for the full mirror set.
+#
+# Same as `update`, plus mirror every launchd-driven binary to /usr/local/bin/krikit/.
+update-system: update _mirror-system
 
 # -----------------------------------------------------------------------------
 # Run / inspect
