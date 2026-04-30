@@ -30,12 +30,14 @@ import           Krikit.Agent.Ops.UpdateStatus.Version
     , versionText
     )
 
--- | Top-level renderer: header, per-tool lines, macOS line.
+-- | Top-level renderer: per-tool lines + macOS line. No
+-- section header -- the consumer (either CLI or
+-- 'Krikit.Agent.Ops.Monitor.Run' assembling the daily digest)
+-- owns the header text.
 --
 -- Output looks like:
 --
 -- @
--- Updates:
 --     codex      0.5.2 (latest)
 --   ! openclaw   1.2.3 -> 1.2.4
 --     claude     1.0.45 (auto-updates)
@@ -43,11 +45,14 @@ import           Krikit.Agent.Ops.UpdateStatus.Version
 -- @
 --
 -- A leading @!@ marks pending updates so they stand out at a glance.
+-- (Earlier versions prepended an "Updates:" header line; that produced
+-- a duplicate "Updates:" inside the daily digest, which already wraps
+-- this body in an "Updates" section. Header now lives only at the
+-- digest layer.)
 renderReport :: [ToolStatus] -> MacOSStatus -> Text
 renderReport tools macos =
     T.intercalate "\n" $
-        [ "Updates:" ]
-        ++ map renderToolStatus tools
+        map renderToolStatus tools
         ++ [ renderMacOSStatus macos ]
 
 -- | One line for one tool.
