@@ -28,6 +28,12 @@ module Krikit.Agent.Ops.Monitor.Digest
     , defaultDigestSchedule
     , shouldEmitDigest
     , buildDigest
+
+      -- * Digest gating (scheduled vs. forced)
+    , ForceDigest (..)
+    , FireMode (..)
+    , DigestDecision (..)
+    , decideDigest
     ) where
 
 import qualified Data.Map.Strict                    as Map
@@ -118,6 +124,62 @@ shouldEmitDigest
 shouldEmitDigest sched nowHour todayIso ms =
     nowHour == dsHourLocal sched
     && msLastDigestDate ms /= todayIso
+
+-- =============================================================================
+-- Digest gating: scheduled vs. forced
+-- =============================================================================
+
+-- | Has the operator passed @--force-digest@ on this invocation?
+-- Drives the difference between a normal launchd-fired tick and
+-- an ad-hoc operator-fired digest.
+data ForceDigest
+    = ForceDigest    -- ^ fire the digest now, regardless of hour or
+                     --   last-emitted date
+    | NormalSchedule -- ^ honour 'shouldEmitDigest' as the gate
+    deriving stock (Eq, Show)
+
+-- | Why a digest fire happened. Decides whether we update
+-- @msLastDigestDate@ post-fire.
+--
+--   * 'ScheduledFire' — the launchd-driven tick crossed the
+--     gate. Mark today as emitted so we don't double-fire later
+--     today.
+--   * 'ForcedFire' — operator asked for it. Do NOT mark today as
+--     emitted; the regularly scheduled digest at
+--     'dsHourLocal' should still fire.
+data FireMode
+    = ScheduledFire
+    | ForcedFire
+    deriving stock (Eq, Show)
+
+-- | What 'Krikit.Agent.Ops.Monitor.Run.runOnce' should do for the
+-- digest branch on this tick.
+data DigestDecision
+    = DigestFire !FireMode
+    | DigestSkip
+    deriving stock (Eq, Show)
+
+-- | Pure decision: given the operator's force flag, the configured
+-- schedule, and the current state, do we fire the digest now (and
+-- if so, do we mark it as emitted)?
+--
+-- Force always wins. Without force, we honour 'shouldEmitDigest'
+-- exactly as the launchd-driven path always has.
+decideDigest
+    :: ForceDigest
+    -> DigestSchedule
+    -> Int            -- ^ current local hour, 0..23
+    -> Text           -- ^ today's date in @YYYY-MM-DD@
+    -> MonitorState
+    -> DigestDecision
+decideDigest force sched nowHour todayIso ms =
+    case force of
+        ForceDigest -> DigestFire ForcedFire
+        NormalSchedule
+            | shouldEmitDigest sched nowHour todayIso ms ->
+                DigestFire ScheduledFire
+            | otherwise ->
+                DigestSkip
 
 -- | Render the daily digest body. Includes:
 --

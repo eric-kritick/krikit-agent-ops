@@ -12,11 +12,20 @@
 --   2. Run all checks.
 --   3. Compute alert transitions vs prior state, send each via
 --      Telegram.
---   4. If now is the configured digest hour and we haven't fired
---      a digest today, build + send the daily digest. The digest
---      includes the live check results plus the outputs of
---      shelled-out adjunct binaries (@krikit-regen-summary@,
---      @krikit-update-status@).
+--   4. Decide whether to fire the daily digest. The decision is
+--      pure and lives in 'decideDigest':
+--
+--       * Normal launchd-driven tick (@'NormalSchedule'@): fire
+--         only if the hour gate matches and we haven't fired
+--         today; mark today as emitted post-fire.
+--       * Operator-invoked @--force-digest@
+--         (@'ForceDigest'@): fire unconditionally; DO NOT mark
+--         today as emitted, so the regularly scheduled digest
+--         still fires at @dsHourLocal@.
+--
+--      The digest includes the live check results plus the
+--      outputs of shelled-out adjunct binaries
+--      (@krikit-regen-summary@, @krikit-update-status@).
 --   5. Save updated state.
 --
 -- Mirrors @monitor.py@'s control flow 1:1, with each section now
@@ -29,6 +38,7 @@ module Krikit.Agent.Ops.Monitor.Run
 
       -- * Orchestrator
     , runOnce
+    , runOnceWith
     ) where
 
 import           Control.Exception                (IOException, try)
@@ -55,11 +65,14 @@ import           Text.Read                         (readMaybe)
 import           Krikit.Agent.Ops.Effect.Telegram (Telegram, sendMessage)
 import           Krikit.Agent.Ops.Monitor.Check   (runAllChecks)
 import           Krikit.Agent.Ops.Monitor.Digest
-    ( DigestSchedule (..)
+    ( DigestDecision (..)
+    , DigestSchedule (..)
+    , FireMode (..)
+    , ForceDigest (..)
     , buildDigest
+    , decideDigest
     , defaultDigestSchedule
     , renderAlert
-    , shouldEmitDigest
     , transitionAlerts
     )
 import           Krikit.Agent.Ops.Monitor.State
@@ -130,19 +143,34 @@ runConfigFromEnv = do
 -- Orchestrator
 -- =============================================================================
 
--- | One full monitor pass: run checks, alert on transitions,
--- maybe emit digest, persist state. Returns nothing -- the side
--- effects are the point. Failures inside any one step are
--- swallowed so the pass continues (matches @monitor.py@'s
--- always-exit-0 stance: alerting is best-effort, launchd will
--- fire us again in 5 minutes).
+-- | One full monitor pass under the normal launchd-driven
+-- schedule. See 'runOnceWith' for the underlying primitive.
 runOnce
     :: ( Telegram :> es
        , IOE     :> es
        )
     => RunConfig
     -> Eff es ()
-runOnce cfg = do
+runOnce = runOnceWith NormalSchedule
+
+-- | One full monitor pass: run checks, alert on transitions,
+-- maybe emit digest, persist state. Returns nothing -- the side
+-- effects are the point. Failures inside any one step are
+-- swallowed so the pass continues (matches @monitor.py@'s
+-- always-exit-0 stance: alerting is best-effort, launchd will
+-- fire us again in 5 minutes).
+--
+-- 'ForceDigest' inverts the digest gate (see module docstring
+-- and 'decideDigest'); a forced fire does NOT mark the day as
+-- emitted, so a normal schedule digest tomorrow still fires.
+runOnceWith
+    :: ( Telegram :> es
+       , IOE     :> es
+       )
+    => ForceDigest
+    -> RunConfig
+    -> Eff es ()
+runOnceWith force cfg = do
     -- 1. Load state.
     state0 <- liftIO (loadStateFrom (rcStatePath cfg))
 
@@ -155,23 +183,26 @@ runOnce cfg = do
     let alerts = transitionAlerts (msAlerts state0) results
     mapM_ (void . sendMessage . renderAlert) alerts
 
-    -- 4. Daily digest, gated by hour + last-emitted-date.
+    -- 4. Digest decision (pure). Then act on it.
     (nowHourLocal, todayLocalIso) <- liftIO localHourAndDate
-    stateB <-
-        if shouldEmitDigest (rcDigestSchedule cfg)
-                            nowHourLocal
-                            todayLocalIso
-                            stateA
-            then do
-                regen  <- liftIO (readBin (rcRegenSummaryBin  cfg))
-                upd    <- liftIO (readBin (rcUpdateStatusBin  cfg))
-                let body = buildDigest todayLocalIso (rcHostName cfg) results
-                            [ ("Regen / verify", regen)
-                            , ("Updates",        upd)
-                            ]
-                void (sendMessage body)
-                pure (markDigestEmitted todayLocalIso stateA)
-            else pure stateA
+    let decision = decideDigest force
+                                (rcDigestSchedule cfg)
+                                nowHourLocal
+                                todayLocalIso
+                                stateA
+    stateB <- case decision of
+        DigestSkip -> pure stateA
+        DigestFire mode -> do
+            regen  <- liftIO (readBin (rcRegenSummaryBin  cfg))
+            upd    <- liftIO (readBin (rcUpdateStatusBin  cfg))
+            let body = buildDigest todayLocalIso (rcHostName cfg) results
+                        [ ("Regen / verify", regen)
+                        , ("Updates",        upd)
+                        ]
+            void (sendMessage body)
+            pure $ case mode of
+                ScheduledFire -> markDigestEmitted todayLocalIso stateA
+                ForcedFire    -> stateA
 
     -- 5. Persist.
     liftIO (saveStateTo (rcStatePath cfg) stateB)

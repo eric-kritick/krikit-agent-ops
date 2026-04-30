@@ -110,3 +110,41 @@ spec = do
             txt `shouldNotSatisfy` T.isInfixOf "Regen:"
             txt `shouldNotSatisfy` T.isInfixOf "Updates:"
             txt `shouldSatisfy`    T.isInfixOf "Real:"
+
+    describe "decideDigest" $ do
+        let sched = DigestSchedule { dsHourLocal = 7 }
+            today = "2026-04-30"
+
+        -- ---- NormalSchedule path ----------------------------------
+
+        it "NormalSchedule: fires + marks emitted at the gate hour" $
+            decideDigest NormalSchedule sched 7 today emptyState
+                `shouldBe` DigestFire ScheduledFire
+
+        it "NormalSchedule: skips when hour doesn't match" $
+            decideDigest NormalSchedule sched 6 today emptyState
+                `shouldBe` DigestSkip
+
+        it "NormalSchedule: skips when already fired today" $ do
+            let s = emptyState { msLastDigestDate = today }
+            decideDigest NormalSchedule sched 7 today s
+                `shouldBe` DigestSkip
+
+        -- ---- ForceDigest path -------------------------------------
+
+        it "ForceDigest: fires (as ForcedFire) outside the gate hour" $
+            decideDigest ForceDigest sched 6 today emptyState
+                `shouldBe` DigestFire ForcedFire
+
+        it "ForceDigest: fires (as ForcedFire) even if already fired today" $ do
+            let s = emptyState { msLastDigestDate = today }
+            decideDigest ForceDigest sched 23 today s
+                `shouldBe` DigestFire ForcedFire
+
+        it "ForceDigest: still ForcedFire when the gate would have fired anyway" $
+            -- Pathological case: operator runs --force-digest at 07:00
+            -- on a day not yet emitted. We pick ForcedFire over
+            -- ScheduledFire so the post-fire bookkeeping doesn't
+            -- inadvertently mark the day emitted on a forced run.
+            decideDigest ForceDigest sched 7 today emptyState
+                `shouldBe` DigestFire ForcedFire

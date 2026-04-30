@@ -31,6 +31,7 @@ import           Options.Applicative
     , progDesc
     , short
     , strOption
+    , switch
     , (<**>)
     )
 import           System.Exit                          (exitSuccess)
@@ -41,10 +42,11 @@ import           Krikit.Agent.Ops.Effect.Telegram
     ( botCredsFromEnv
     , runTelegramIO
     )
+import           Krikit.Agent.Ops.Monitor.Digest      (ForceDigest (..))
 import           Krikit.Agent.Ops.Monitor.Run
     ( RunConfig (..)
     , runConfigFromEnv
-    , runOnce
+    , runOnceWith
     )
 
 import qualified Network.HTTP.Client                  as HC
@@ -55,6 +57,7 @@ data Opts = Opts
     { optStatePath        :: !(Maybe FilePath)
     , optRegenSummaryBin  :: !(Maybe FilePath)
     , optUpdateStatusBin  :: !(Maybe FilePath)
+    , optForceDigest      :: !Bool
     }
 
 optsParser :: Parser Opts
@@ -78,6 +81,16 @@ optsParser =
                 <> metavar "PATH"
                 <> help "Path to krikit-update-status (default: \
                         \/usr/local/bin/krikit/krikit-update-status)"))
+        <*> switch
+            (  long "force-digest"
+            <> help "Run checks AND send the daily digest right now, \
+                    \regardless of the configured digest hour or \
+                    \whether one already fired today. Does NOT update \
+                    \last_digest_date, so the regularly scheduled \
+                    \digest tomorrow morning still fires. Useful for \
+                    \verifying digest formatting / Telegram delivery / \
+                    \regen-summary integration without waiting for \
+                    \07:00 local.")
 
 main :: IO ()
 main = do
@@ -104,12 +117,14 @@ main = do
                         Nothing -> rcUpdateStatusBin base
                 }
 
+    let force = if optForceDigest opts then ForceDigest else NormalSchedule
+
     creds <- botCredsFromEnv
     mgr   <- HC.newManager HTLS.tlsManagerSettings
 
     runEff
         . runTelegramIO mgr creds
-        $ runOnce cfg
+        $ runOnceWith force cfg
 
     -- Always exit 0: alerting is a side effect; launchd respawns
     -- us in 5 minutes regardless. A non-zero exit would only mask
